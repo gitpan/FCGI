@@ -18,3 +18,4 @@ configure.in
 acconfig.h
 os_unix.c
 os_win32.c
+typemap

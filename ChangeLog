@@ -1,3 +1,7 @@
+Version 0.35 -- 22 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o Added forgotten typemap
+
 Version 0.34 -- 17 June 1998  <skimo@kotnet.org> Sven Verdoolaege
 	
 	o No longer force sfio less compile
