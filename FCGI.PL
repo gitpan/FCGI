@@ -1,3 +1,11 @@
+use Config;
+
+open OUT, ">FCGI.xs";
+print OUT "#define PL_warnhook warnhook\n" 
+    unless (exists $Config{apiversion} && $Config{apiversion} >= 5.005);
+print OUT while <DATA>;
+close OUT;
+__END__
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
@@ -100,7 +108,6 @@ FCGI_Accept(void)
          * as FastCGI or as CGI?
          */
         isCGI = FCGX_IsCGI();
-        acceptCalled = TRUE;
     } else if(isCGI) {
         /*
          * Not first call to FCGI_Accept and running as CGI means
@@ -144,14 +151,15 @@ FCGI_Accept(void)
 	sv_setiv(SvRV(svout), (IV) out);
 	sv_setiv(SvRV(sverr), (IV) error);
 	sv_setiv(SvRV(svin), (IV) in);
-	if (warnhook) SvREFCNT_dec(warnhook);
-	warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
+	if (PL_warnhook) SvREFCNT_dec(PL_warnhook);
+	PL_warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
 	if (diehook) SvREFCNT_dec(diehook);
 	diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
 #endif
 	finishCalled = FALSE;
         environ = envp;
     }
+    acceptCalled = TRUE;
     return 0;
 }
 
@@ -172,9 +180,9 @@ FCGI_Finish(void)
     FCGX_Finish();
     environ = NULL;
     finishCalled = TRUE;
-    if (warnhook) {
-	SvREFCNT_dec(warnhook);
-	warnhook = Nullsv;
+    if (PL_warnhook) {
+	SvREFCNT_dec(PL_warnhook);
+	PL_warnhook = Nullsv;
     }
     if (diehook) {
 	SvREFCNT_dec(diehook);

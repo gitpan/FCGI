@@ -36,5 +36,10 @@ if you don't want that or if it doesn't find them.
 If you're on a solaris system and your installed fcgi library is 2.02b
 or earlier, you'll probably want to use the included files.
 
+The FCGI module installs die and warn handlers that merely print
+the error/warning to STDERR (the default handlers print directly
+to stderr, which isn't redirected in the non sfio case). I'm not
+very happy with the result. Suggestions welcome.
+
 Sven Verdoolaege
 skimo@kotnet.org

@@ -1,3 +1,7 @@
+Version 0.41 -- 29 July 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o Compiles with perl 5.005
+
 Version 0.40 -- 15 July 1998  <skimo@kotnet.org> Sven Verdoolaege
 
 	o Added default die hook

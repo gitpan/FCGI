@@ -24,12 +24,15 @@ $inc = $prefix ? "-I$prefix/include" : '-I.';
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.40',
+    'VERSION'	=> '0.41',
     'LIBS'	=> [ @libs ],
     'OBJECT'	=> "@o",
     'INC'	=> $inc,
     'dist'	=> {'COMPRESS'=>'gzip -9f', 'SUFFIX'=>'gz'},
     'clean'	=> { FILES =>'config.cache fcgi_config.h' },
+    'PL_FILES'	=> { 'echo.PL'	=>	'echo.fpl',
+		     'FCGI.PL'	=>	'FCGI.xs',
+		   },
 );
 
 exit if -f 'fcgi_config.h' or $prefix;
