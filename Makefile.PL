@@ -20,7 +20,8 @@ for $dir (@prefix) {
 	push @libs, ('-lfcgi', "-L$dir/lib");
     }
 }
-push @o, 'fcgiapp.o' unless $prefix;
+$sys = $^O eq 'MSWin32' ? 'win32' : 'unix';
+push @o, "fcgiapp.o", "os_$sys.o" unless $prefix;
 $inc = $prefix ? "-I$prefix/include" : '-I.';
 
 
@@ -28,7 +29,7 @@ $inc = $prefix ? "-I$prefix/include" : '-I.';
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.29',
+    'VERSION'	=> '0.30',
     'LIBS'	=> [ @libs ],
     'OBJECT'	=> "@o",
     'INC'	=> $inc,
