@@ -1,4 +1,4 @@
-# $Id: Makefile.PL,v 1.25 2001/09/21 16:14:11 skimo Exp $
+# $Id: Makefile.PL,v 1.29 2001/09/24 18:03:08 skimo Exp $
 
 use ExtUtils::MakeMaker;
 use IO::File;
@@ -9,63 +9,63 @@ use Getopt::Long;
 @h1 = qw(fastcgi.h fcgiapp.h fcgimisc.h fcgios.h);
 @h = (@h1, 'fcgi_config.h');
 @o = qw(FCGI.o);
-@dist1 = qw(LICENSE.TERMS configure configure.in install.sh missing
-            config.sub config.guess ltmain.sh);
+@dist1 = qw(LICENSE.TERMS);
 @dist2 = qw(fcgiapp.c os_unix.c os_win32.c);
-@dist3 = (@h1, qw(fcgi_config.h.in fcgi_config_x86.h));
+@dist3 = (@h1, qw(fcgi_config_x86.h));
 
-GetOptions ("pure-perl!" => \$pure);
+GetOptions ("pure-perl!" => \$pure,
+	    "use-installed:s" => \$useinstalled);
 $pure = "0" unless defined $pure;
 open(CFG,">FCGI.cfg");
 print CFG "\$pure = $pure;1;\n";
 close CFG;
 
+$libfound = 0;
+@libs = ();
+
 if (! $pure) {
-	my $cwd = cwd();
-	my $devkit = "$cwd/..";
+    my $cwd = cwd();
+    my $devkit = "$cwd/..";
 
-	if (-d "$devkit/libfcgi" && -d "$devkit/include") {
-		# devkit
-		if (grep { ! -f "$devkit/include/$_" } @dist3 
-			or grep { ! -f "$devkit/libfcgi/$_" } @dist2)
-		{
-			warn "This appears to be a FastCGI devkit distribution, " .
-				 "but one or more FastCGI library files are missing. \n" .
-				 "Please check the integrity of the distribution.\n";
-			exit -1;
-		}
-
-		# Copy the C lib files down to ensure a compatible build.
-		print "Copying C library files from the devkit distribution\n";
-	    use File::Copy qw(copy);
-
-		# TODO: stop or save if a local file has been modified
-		foreach (@dist1, @dist2, @dist3) { unlink };
-		foreach (@dist1) { copy("$devkit/$_", ".") || die $! };
-		foreach (@dist2) { copy("$devkit/libfcgi/$_", ".") || die $! };
-		foreach (@dist3) { copy("$devkit/include/$_", ".") || die $! };
+    if (defined $useinstalled) {
+	require ExtUtils::Liblist;
+	my $mm = MM->new({NAME => 'FCGI'});
+	my $libspec = $useinstalled ? "-L$useinstalled/lib " : "";
+	$libspec .= "-lfcgi";
+	my @l = $mm->ext($libspec);
+	if ($l[0] || $l[1] || $l[2]) {
+	    $prefix = "$useinstalled/include" if $useinstalled;
+	    $libfound = 1;
+	    push @libs, $libspec;
 	}
-	else {
-	    # CPAN  
-	    for $dir ("/usr", "/usr/local") {
-	        if (-d "$dir/lib/" && -f "$dir/lib/libfcgi.a" 
-	        	&& -d "$dir/include" && !grep {!-f "$dir/include/$_"} (@h)) 
-	        {
-	            print "Found fcgi library and include files in $dir\n";
-	            print "Will be using those instead of the included files\n";
-	            print "Edit Makefile.PL if you don't like it\n";
-	            
-	            $prefix = $dir;
-	            push @libs, "-L$dir/lib -lfcgi"; 
-	            last;
-	        }
-	    }
+	# avoid duplicate check for complete kit
+	ExtUtils::MakeMaker::WriteEmptyMakefile() if ! -f "Makefile";
+    }
+    if (!$libfound && -d "$devkit/libfcgi" && -d "$devkit/include") {
+	# devkit
+	if (grep { ! -f "$devkit/include/$_" } @dist3 
+		or grep { ! -f "$devkit/libfcgi/$_" } @dist2)
+	{
+		warn "This appears to be a FastCGI devkit distribution, " .
+		     "but one or more FastCGI library files are missing. \n" .
+		     "Please check the integrity of the distribution.\n";
+		exit -1;
 	}
+
+	my $extrarules = join "\n", 
+	    map { $b = $_; $b =~ s/\.c$//; my $s="$devkit/libfcgi/$b.c"; 
+		  "$b\$(OBJ_EXT): $s\n\t".
+		  '$(CCCMD) $(CCCDLFLAGS) -I$(PERL_INC) $(DEFINE) '."$s\n"; }
+		@dist2;
+	eval 'package MY; sub postamble { $extrarules; }';
+	$prefix = $devkit;
+    }
 }
 
 $sys = $^O eq 'MSWin32' ? 'win32' : 'unix';
-push @o, "fcgiapp.o", "os_$sys.o" unless $prefix;
-$inc = $prefix ? "-I$prefix/include" : '-I.';
+push @o, "fcgiapp.o", "os_$sys.o" unless $libfound;
+$inc = '-I.' unless $libfound;
+$inc .= " -I$prefix/include" if $prefix;
 
 push(@extras, CAPI => 'TRUE')
      if ($] >= 5.005 and $^O eq 'MSWin32'
@@ -88,14 +88,12 @@ if ($pure) {
 } else {
 
 	if ("$sys" eq "win32") {
-		@libs = (scalar @libs)
-			? map { "$_ :nosearch -lws2_32" } @libs 
-			: (':nosearch -lws2_32');
+		push @libs, ":nosearch -lws2_32";
 		push @extras, 'DEFINE' => '-DDLLAPI=__declspec(dllexport)';
 	}
 
     push @extras,
-	'LIBS'	=> [ @libs ],
+	'LIBS'	=> [ "@libs" ],
 	'OBJECT'	=> "@o",
 	'INC'	=> $inc;
 }
@@ -133,7 +131,7 @@ $mm = MM->new({
 delete $mm->{MAN3PODS}{oldinterface.pod};
 $mm->flush;
 
-exit if -f 'fcgi_config.h' or $prefix or $pure;
+exit if -f 'fcgi_config.h' or $libfound or $pure;
 
 # CPAN and no installed lib found
 if ($sys eq "win32") {
