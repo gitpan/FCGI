@@ -33,6 +33,11 @@ If Makefile.PL finds an already installed (exported) fcgi library
 it will use that instead of the included files. Edit Makefile.PL
 if you don't want that or if it doesn't find them.
 
+To configure the library Makefile.PL will run ./configure .
+You may want to run it yourself beforehand because its findings
+may not always be correct.
+The INSTALL file describes how to run ./configure (and only that).
+
 If you're on a solaris system and your installed fcgi library is 2.02b
 or earlier, you'll probably want to use the included files.
 

@@ -35,9 +35,28 @@ WriteMakefile(
 		   },
 );
 
-exit if -f 'fcgi_config.h' or $prefix;
+if($sys eq "win32") {
+  # configure will almost certainly not run on a normal NT install,
+  # use the pregenerated configuration file
 
-print "Running ./configure for you\n";
-print "Please read INSTALL for information on how to run it yourself\n";
+  print "Using prebuilt fcgi_config.h file for Windows\n";
+  unlink("fcgi_config.h");
+  die $! unless rename("fcgi_config.w32","fcgi_config.h");
 
-system("./configure");
+  # Win build system also can't deal with existence of FCGI.xs or absence of
+  # FCGI.c
+  unlink("FCGI.xs");
+  open(F, ">FCGI.c"); close(F);
+  $now = time; $before = $now - 600;
+  utime $before, $before, "FCGI.c";
+  utime $now, $now, "FCGI.PL";
+
+} else {
+    exit if -f 'fcgi_config.h' or $prefix;
+
+    print "Running ./configure for you\n";
+    print "Please read INSTALL for information on how to run it yourself\n";
+
+    $ENV{'CC'} = $Config{'cc'};
+    system("./configure");
+}

@@ -17,6 +17,7 @@ AC_INIT(fcgiapp.c)
 #       7) Checking for existence of various system libraries and routines.
 #--------------------------------------------------------------------
 
+AC_PROG_CC
 AC_CONFIG_HEADER(fcgi_config.h)
 AC_MSG_CHECKING(for sun_len in sys/un.h)
 AC_EGREP_HEADER(sun_len,

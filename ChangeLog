@@ -1,3 +1,9 @@
+Version 0.43 -- 22 December 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o POST on bigendians (Paul GABORIT <gaborit@enstimac.fr>)
+	o Some win32 changes (Monty <xiphmont@fastserv.com>)
+	o library fixes from "Saccoccio, Robert" <roberts@aiinet.com>
+
 Version 0.42 -- 28 August 1998  <skimo@kotnet.org> Sven Verdoolaege
 
 	o environ fixes ?

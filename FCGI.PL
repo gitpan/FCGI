@@ -1,8 +1,14 @@
 use Config;
 
 open OUT, ">FCGI.xs";
-unless (exists $Config{apiversion} && $Config{apiversion} >= 5.005) {
-    for (qw(warnhook in_eval)) {
+$_=myconfig();
+m/(\d+).(\d+) patchlevel (\d+) subversion (\d+)/;
+$version="$1.$2"."0$3"."0$4";
+
+print "Generating FCGI.xs for Perl version $version\n";
+#unless (exists $Config{apiversion} && $Config{apiversion} >= 5.005) 
+unless ($version >= 5.005) {
+    for (qw(sv_undef diehook warnhook in_eval)) {
 	print OUT "#define PL_$_ $_\n" 
     }
 }
@@ -156,8 +162,8 @@ FCGI_Accept(void)
 	sv_setiv(SvRV(svin), (IV) in);
 	if (PL_warnhook) SvREFCNT_dec(PL_warnhook);
 	PL_warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
-	if (diehook) SvREFCNT_dec(diehook);
-	diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::DIE")));
+	if (PL_diehook) SvREFCNT_dec(PL_diehook);
+	PL_diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::DIE")));
 #endif
 	finishCalled = FALSE;
         environ = envp;
@@ -190,9 +196,9 @@ FCGI_Finish(void)
 	SvREFCNT_dec(PL_warnhook);
 	PL_warnhook = Nullsv;
     }
-    if (diehook) {
-	SvREFCNT_dec(diehook);
-	diehook = Nullsv;
+    if (PL_diehook) {
+	SvREFCNT_dec(PL_diehook);
+	PL_diehook = Nullsv;
     }
 #endif
 }
@@ -301,10 +307,10 @@ WRITE(stream, bufsv, len, ...)
 	    len = blen - offset;
 	if (offset < 0 || offset >= blen ||
 		(n = FCGX_PutStr(buf+offset, len, stream)) < 0) 
-	    ST(0) = &sv_undef;
+	    ST(0) = &PL_sv_undef;
 	else {
 	    ST(0) = sv_newmortal();
-	    sv_setpvn(ST(0), (char *)&n, 1);
+	    sv_setpvf(ST(0), "%c", n);
 	}
 
 int
@@ -342,8 +348,8 @@ GETC(stream)
 	CODE:
 	if ((retval = FCGX_GetChar(stream)) != -1) {
 	    ST(0) = sv_newmortal();
-	    sv_setpvn(ST(0), (char *)&retval, 1);
-	} else ST(0) = &sv_undef;
+	    sv_setpvf(ST(0), "%c", retval);
+	} else ST(0) = &PL_sv_undef;
 
 bool
 CLOSE(stream)

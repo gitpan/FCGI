@@ -14,6 +14,7 @@ fcgiappmisc.h
 fcgimisc.h
 fcgios.h
 fcgi_config.h.in
+fcgi_config.w32
 configure
 configure.in
 acconfig.h

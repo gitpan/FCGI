@@ -17,7 +17,7 @@
  */
 
 #ifndef lint
-static const char rcsid[] = "$Id: os_unix.c,v 1.1.2.6 1997/03/31 23:56:31 snapper Exp $";
+static const char rcsid[] = "$Id: os_unix.c,v 1.5 1998/12/09 05:41:38 roberts Exp $";
 #endif /* not lint */
 
 #include "fcgimisc.h"
@@ -51,6 +51,7 @@ static const char rcsid[] = "$Id: os_unix.c,v 1.1.2.6 1997/03/31 23:56:31 snappe
 #include <netinet/in.h>
 #endif
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 
 #include "fcgios.h"
 
@@ -365,7 +366,7 @@ int OS_FcgiConnect(char *bindPath)
 	    exit(1000);
 	}
 	sa.inetVariant.sin_family = AF_INET;
-	memcpy((caddr_t)&sa.inetVariant.sin_addr, hp->h_addr, hp->h_length);
+	memcpy(&sa.inetVariant.sin_addr, hp->h_addr, hp->h_length);
 	sa.inetVariant.sin_port = htons(port);
 	servLen = sizeof(sa.inetVariant);
 	resultSock = socket(AF_INET, SOCK_STREAM, 0);
@@ -990,11 +991,19 @@ int OS_FcgiIpcAccept(char *clientAddrList)
             * if the address isn't valid, close the connection and
             * try again.
             */
-            if ((sa.in.sin_family == AF_INET)
-                    && (!ClientAddrOK(&sa.in, clientAddrList))) {
-                close(socket);
-                continue;
-            } 
+            if (sa.in.sin_family == AF_INET) {
+#ifdef TCP_NODELAY
+                /* No replies to outgoing data, so disable Nagle algorithm */
+                int set = 1;
+                setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, 
+                           (char *)&set, sizeof(set));
+#endif            
+                if (!ClientAddrOK(&sa.in, clientAddrList)) {
+                    close(socket);
+                    continue;
+                }
+                
+            }
             break;
         }
 
@@ -1096,15 +1105,18 @@ int OS_IpcClose(int ipcFd)
  */
 int OS_IsFcgi()
 {
-    int type = 0;
-    int len = sizeof(type);
+	union {
+        struct sockaddr_in in;
+        struct sockaddr_un un;
+    } sa;
+    int len = sizeof(sa);
 
-    if (getsockopt(FCGI_LISTENSOCK_FILENO, SOL_SOCKET, 
-                   SO_TYPE, (char *)&type, &len) == 0) {
+    if (getpeername(FCGI_LISTENSOCK_FILENO, (struct sockaddr *)&sa, &len) != 0 
+            && errno == ENOTCONN)
         isFastCGI = TRUE;
-    } else {
+    else
         isFastCGI = FALSE;
-    }
+        
     return (isFastCGI);
 }
 
