@@ -12,12 +12,13 @@ unless ($] >= 5.005) {
 print OUT while <DATA>;
 close OUT;
 __END__
-/* $Id: FCGI.PL,v 1.8 1999/07/30 12:01:00 skimo Exp $ */
+/* $Id: FCGI.PL,v 1.11 1999/08/10 11:06:37 skimo Exp $ */
 
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
 
+#include "fcgi_config.h"
 #include "fcgiapp.h"
 
 #ifndef FALSE
@@ -26,6 +27,10 @@ __END__
 
 #ifndef TRUE
 #define TRUE  (1)
+#endif
+
+#ifndef dTHX
+#define dTHX
 #endif
 
 #ifdef USE_SFIO
@@ -85,16 +90,17 @@ sfdcdelfcgi(disc)
 
 static int isCGI = -1; /* -1: not checked; 0: FCGI; 1: FCGI */
 
+#if defined(USE_LOCKING) && defined(USE_THREADS)
+static perl_mutex   accept_mutex;
+#endif
+
 typedef struct FCGP_Request {
-    int		    acceptCalled;
-    int		    finishCalled;
+    int		    bound;
     SV*		    svin;
     SV*		    svout;
     SV*		    sverr;
     GV*		    gv[3];
-    GV*		    gvNew[3];
     HV*		    hvEnv;
-    FCGX_Stream*    in;
     FCGX_Request*   requestPtr;
 #ifdef USE_SFIO
     int		    sfcreated[3];
@@ -104,7 +110,9 @@ typedef struct FCGP_Request {
 static int 
 FCGI_Flush(FCGP_Request* request)
 {
-    if(!request->acceptCalled || isCGI) {
+    dTHX;
+
+    if(!request->bound) {
 	return;
     }
 #ifdef USE_SFIO
@@ -123,6 +131,7 @@ FCGI_UndoBinding(FCGP_Request* request)
     IO *io[3];
     int i;
 #endif
+    dTHX;
 
 #ifdef USE_SFIO
     sfdcdelfcgi(sfdisc(IoIFP(io[0] = GvIOp(request->gv[0])), SF_POPDISC));
@@ -141,120 +150,8 @@ FCGI_UndoBinding(FCGP_Request* request)
     sv_unmagic((SV *)request->gv[1], 'q');
     sv_unmagic((SV *)request->gv[2], 'q');
 #endif
-}
-
-static int 
-FCGI_Accept(FCGP_Request* request)
-{
-    if(isCGI == -1) {
-        /*
-         * First call to FCGI_Accept.  Is application running
-         * as FastCGI or as CGI?
-         */
-        isCGI = FCGX_IsCGI();
-    } else if(isCGI) {
-        /*
-         * Not first call to FCGI_Accept and running as CGI means
-         * application is done.
-         */
-        return(EOF);
-    } 
-    if(request->acceptCalled && !request->finishCalled) {
-	FCGI_UndoBinding(request);
-    }
-    if(!isCGI) {
-#ifdef USE_SFIO
-	IO *io[3];
-	int i;
-#endif
-	FCGX_Stream *out, *error;
-	FCGX_ParamArray envp;
-        int acceptResult = FCGX_Accept_r(&request->in, &out, &error, 
-					 &envp, request->requestPtr);
-        if(acceptResult < 0) {
-            return acceptResult;
-        }
-
-	populate_env(envp, request->hvEnv);
-
-#ifdef USE_SFIO
-	for (i = 0; i < 3; ++i) {
-	    io[i] = GvIOn(request->gv[i] = request->gvNew[i]);
-	    if (!(i == 0 ? IoIFP(io[i]) : IoOFP(io[i]))) {
-		IoIFP(io[i]) = sftmp(0);
-		/*IoIFP(io[i]) = sfnew(NULL, NULL, SF_UNBOUND, 0, 
-				     SF_STRING | (i ? SF_WRITE : SF_READ));*/
-		if (i != 0) IoOFP(io[i]) = IoIFP(io[i]);
-		request->sfcreated[i] = TRUE;
-	    }
-	}
-        sfdisc(IoIFP(io[0]), sfdcnewfcgi(request->in));
-        sfdisc(IoOFP(io[1]), sfdcnewfcgi(out));
-        sfdisc(IoOFP(io[2]), sfdcnewfcgi(error));
-#else
-	if (!request->svout) {
-	    newSVrv(request->svout = newSV(0), "FCGI::Stream");
-	    newSVrv(request->sverr = newSV(0), "FCGI::Stream");
-	    newSVrv(request->svin = newSV(0), "FCGI::Stream");
-	}
-	sv_magic((SV *)request->gv[1] = request->gvNew[1], 
-		request->svout, 'q', Nullch, 0);
-	sv_magic((SV *)request->gv[2] = request->gvNew[2], 
-		request->sverr, 'q', Nullch, 0);
-	sv_magic((SV *)request->gv[0] = request->gvNew[0], 
-		request->svin, 'q', Nullch, 0);
-	sv_setiv(SvRV(request->svout), (IV) out);
-	sv_setiv(SvRV(request->sverr), (IV) error);
-	sv_setiv(SvRV(request->svin), (IV) request->in);
-#endif
-	request->finishCalled = FALSE;
-    }
-    request->acceptCalled = TRUE;
-    return 0;
-}
-
-static void 
-FCGI_Finish(FCGP_Request* request)
-{
-    if(!request->acceptCalled || isCGI) {
-	return;
-    }
-    FCGI_UndoBinding(request);
-    request->in = NULL;
     FCGX_Finish_r(request->requestPtr);
-    request->finishCalled = TRUE;
-}
-
-static int 
-FCGI_StartFilterData(FCGP_Request* request)
-{
-    return request->in ? FCGX_StartFilterData(request->in) : -1;
-}
-
-static void
-FCGI_SetExitStatus(FCGP_Request* request, int status)
-{
-    if (request->in) FCGX_SetExitStatus(status, request->in);
-}
-
-static FCGP_Request *
-FCGI_Request()
-{
-    FCGX_Request* fcgx_req;
-    FCGP_Request* req;
-
-    Newz(551, fcgx_req, 1, FCGX_Request);
-    Newz(551, req, 1, FCGP_Request);
-    req->requestPtr = fcgx_req;
-
-    return req;
-}
-
-static void
-FCGI_Release_Request(FCGP_Request *req)
-{
-    Safefree(req->requestPtr);
-    Safefree(req);
+    request->bound = FALSE;
 }
 
 static void
@@ -265,7 +162,9 @@ HV *hv;
     int i;
     char *p, *p1;
     SV   *sv;
+    dTHX;
 
+    hv_clear(hv);
     for(i = 0; ; i++) {
 	if((p = envp[i]) == NULL) {
 	    break;
@@ -279,6 +178,140 @@ HV *hv;
     }
 }
 
+static int 
+FCGI_Accept(FCGP_Request* request)
+{
+    dTHX;
+
+    if(isCGI == -1) {
+        /*
+         * First call to FCGI_Accept.  Is application running
+         * as FastCGI or as CGI?
+         */
+        isCGI = FCGX_IsCGI();
+    } else if(isCGI) {
+        /*
+         * Not first call to FCGI_Accept and running as CGI means
+         * application is done.
+         */
+        return(EOF);
+    } 
+    if(!isCGI) {
+#ifdef USE_SFIO
+	IO *io[3];
+	int i;
+#endif
+	FCGX_Request *fcgx_req = request->requestPtr;
+        int acceptResult;
+
+	if(request->bound) {
+	    FCGI_UndoBinding(request);
+	}
+#if defined(USE_LOCKING) && defined(USE_THREADS)
+	MUTEX_LOCK(&accept_mutex);
+#endif
+	acceptResult = FCGX_Accept_r(fcgx_req);
+#if defined(USE_LOCKING) && defined(USE_THREADS)
+	MUTEX_UNLOCK(&accept_mutex);
+#endif
+        if(acceptResult < 0) {
+            return acceptResult;
+        }
+
+	populate_env(fcgx_req->envp, request->hvEnv);
+
+#ifdef USE_SFIO
+	for (i = 0; i < 3; ++i) {
+	    io[i] = GvIOn(request->gv[i]);
+	    if (!(i == 0 ? IoIFP(io[i]) : IoOFP(io[i]))) {
+		IoIFP(io[i]) = sftmp(0);
+		/*IoIFP(io[i]) = sfnew(NULL, NULL, SF_UNBOUND, 0, 
+				     SF_STRING | (i ? SF_WRITE : SF_READ));*/
+		if (i != 0) IoOFP(io[i]) = IoIFP(io[i]);
+		request->sfcreated[i] = TRUE;
+	    }
+	}
+        sfdisc(IoIFP(io[0]), sfdcnewfcgi(fcgx_req->in));
+        sfdisc(IoOFP(io[1]), sfdcnewfcgi(fcgx_req->out));
+        sfdisc(IoOFP(io[2]), sfdcnewfcgi(fcgx_req->err));
+#else
+	if (!request->svout) {
+	    newSVrv(request->svout = newSV(0), "FCGI::Stream");
+	    newSVrv(request->sverr = newSV(0), "FCGI::Stream");
+	    newSVrv(request->svin = newSV(0), "FCGI::Stream");
+	}
+	sv_magic((SV *)request->gv[1], request->svout, 'q', Nullch, 0);
+	sv_magic((SV *)request->gv[2], request->sverr, 'q', Nullch, 0);
+	sv_magic((SV *)request->gv[0], request->svin, 'q', Nullch, 0);
+	sv_setiv(SvRV(request->svout), (IV) fcgx_req->out);
+	sv_setiv(SvRV(request->sverr), (IV) fcgx_req->err);
+	sv_setiv(SvRV(request->svin), (IV) fcgx_req->in);
+#endif
+	request->bound = TRUE;
+    }
+    return 0;
+}
+
+static void 
+FCGI_Finish(FCGP_Request* request)
+{
+    dTHX;
+
+    if(!request->bound) {
+	return;
+    }
+    FCGI_UndoBinding(request);
+}
+
+static int 
+FCGI_StartFilterData(FCGP_Request* request)
+{
+    return request->requestPtr->in ? 
+	    FCGX_StartFilterData(request->requestPtr->in) : -1;
+}
+
+static FCGP_Request *
+FCGI_Request(in, out, err, env, socket, flags)
+    GV*	    in;
+    GV*	    out;
+    GV*	    err;
+    HV*	    env;
+    int	    socket;
+    int	    flags;
+{
+    FCGX_Request* fcgx_req;
+    FCGP_Request* req;
+
+    Newz(551, fcgx_req, 1, FCGX_Request);
+    FCGX_InitRequest(fcgx_req, socket, flags);
+    Newz(551, req, 1, FCGP_Request);
+    req->requestPtr = fcgx_req;
+    req->gv[0] = in;
+    req->gv[1] = out;
+    req->gv[2] = err;
+    req->hvEnv = env;
+
+    return req;
+}
+
+static void
+FCGI_Release_Request(FCGP_Request *req)
+{
+    FCGI_Finish(req);
+    Safefree(req->requestPtr);
+    Safefree(req);
+}
+
+static void
+FCGI_Init()
+{
+#if defined(USE_LOCKING) && defined(USE_THREADS)
+    dTHX;
+
+    MUTEX_INIT(&accept_mutex);
+#endif
+}
+
 typedef FCGX_Stream *	FCGI__Stream;
 typedef FCGP_Request *	FCGI;
 typedef	GV*		GLOBREF;
@@ -286,35 +319,53 @@ typedef	HV*		HASHREF;
 
 MODULE = FCGI		PACKAGE = FCGI
 
+BOOT:
+    FCGI_Init();
 
 SV *
-Request()
-
-    PROTOTYPE:
-    CODE:
-    RETVAL = Perl_sv_setref_pv(Perl_newSV(0), "FCGI", FCGI_Request());
-
-    OUTPUT:
-    RETVAL
-
-
-int
-Accept(request, in, out, err, env)
-
-    FCGI    request;
+RequestX(in, out, err, env, socket, flags)
     GLOBREF in;
     GLOBREF out;
     GLOBREF err;
     HASHREF env;
+    int	    socket;
+    int	    flags;
 
-    PROTOTYPE: $***$
+    PROTOTYPE: ***$$$
+    CODE:
+    RETVAL = sv_setref_pv(newSV(0), "FCGI", 
+		FCGI_Request(in, out, err, env, socket, flags));
+
+    OUTPUT:
+    RETVAL
+
+int
+OpenSocket(path, backlog)
+    char* path;
+    int backlog;
+
+    PROTOTYPE: $$
+    CODE:
+    RETVAL = FCGX_OpenSocket(path, backlog);
+    OUTPUT:
+    RETVAL
+
+void
+CloseSocket(socket)
+    int socket;
+
+    PROTOTYPE: $
+    CODE:
+    close(socket);
+
+int
+Accept(request)
+
+    FCGI    request;
+
+    PROTOTYPE: $
 
     CODE:
-    request->gvNew[0] = in;
-    request->gvNew[1] = out;
-    request->gvNew[2] = err;
-    request->hvEnv = env;
-
     RETVAL = FCGI_Accept(request);
 
     OUTPUT:

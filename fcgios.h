@@ -18,21 +18,41 @@
 #ifndef _FCGIOS_H
 #define _FCGIOS_H
 
-#ifdef _WIN32
-#define OS_Errno GetLastError()
-#define OS_SetErrno(err) SetLastError(err)
-#ifndef DLLAPI
-#define DLLAPI __declspec(dllimport)
-#endif
-#else
-#define DLLAPI
-#define OS_Errno errno
-#define OS_SetErrno(err) errno = (err)
-#endif
+#include "fcgi_config.h"
 
 #ifdef _WIN32
 #include <io.h>
 #endif
+
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#endif
+
+#if defined (c_plusplus) || defined (__cplusplus)
+extern "C" {
+#endif
+
+
+#ifdef _WIN32
+
+#define OS_Errno GetLastError()
+#define OS_SetErrno(err) SetLastError(err)
+
+#ifndef DLLAPI
+#define DLLAPI __declspec(dllimport)
+#endif
+
+#ifndef O_NONBLOCK
+#define O_NONBLOCK     0x0004  /* no delay */
+#endif
+
+#else /* !_WIN32 */
+
+#define DLLAPI
+#define OS_Errno errno
+#define OS_SetErrno(err) errno = (err)
+
+#endif /* !_WIN32 */
 
 /* This is the initializer for a "struct timeval" used in a select() call
  * right after a new request is accept()ed to determine readablity.  Its
@@ -48,7 +68,6 @@
 #ifndef STDIN_FILENO
 #define STDIN_FILENO  0
 #endif
-
 
 #ifndef STDOUT_FILENO
 #define STDOUT_FILENO 1
@@ -66,16 +85,6 @@
 #define X_OK       0x01
 #endif
 
-#ifdef _WIN32
-#ifndef O_NONBLOCK
-#define O_NONBLOCK     0x0004  /* no delay */
-#endif
-#endif
-
-#if defined (c_plusplus) || defined (__cplusplus)
-extern "C" {
-#endif
-
 #ifndef _CLIENTDATA
 #   if defined(__STDC__) || defined(__cplusplus)
     typedef void *ClientData;
@@ -89,7 +98,7 @@ typedef void (*OS_AsyncProc) (ClientData clientData, int len);
 
 DLLAPI int OS_LibInit(int stdioFds[3]);
 DLLAPI void OS_LibShutdown(void);
-DLLAPI int OS_CreateLocalIpcFd(char *bindPath);
+DLLAPI int OS_CreateLocalIpcFd(const char *bindPath, int backlog);
 DLLAPI int OS_FcgiConnect(char *bindPath);
 DLLAPI int OS_Read(int fd, char * buf, size_t len);
 DLLAPI int OS_Write(int fd, char * buf, size_t len);
@@ -103,9 +112,9 @@ DLLAPI int OS_AsyncWrite(int fd, int offset, void *buf, int len,
 DLLAPI int OS_Close(int fd);
 DLLAPI int OS_CloseRead(int fd);
 DLLAPI int OS_DoIo(struct timeval *tmo);
-DLLAPI int OS_FcgiIpcAccept(char *clientAddrList);
+DLLAPI int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs);
 DLLAPI int OS_IpcClose(int ipcFd);
-DLLAPI int OS_IsFcgi(void);
+DLLAPI int OS_IsFcgi(int sock);
 DLLAPI void OS_SetFlags(int fd, int flags);
 
 #if defined (__cplusplus) || defined (c_plusplus)
