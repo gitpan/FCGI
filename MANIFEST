@@ -1,0 +1,14 @@
+ChangeLog
+FCGI.pm
+FCGI.xs
+LICENSE.TERMS
+MANIFEST
+Makefile.PL
+README
+echo.fpl
+fastcgi.h
+fcgi_config.h
+fcgiapp.c
+fcgiapp.h
+fcgiappmisc.h
+fcgimisc.h

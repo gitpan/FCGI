@@ -1,0 +1,29 @@
+    Copyright (c) 1996 Open Market, Inc.
+    See the file "LICENSE.TERMS" for information on usage and redistribution
+    of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+    Copyright (c) 1996 Sven Verdoolaege
+    No additional restrictions/warranties.
+
+This is a Fast CGI module for perl. It's based on the FCGI module
+that comes with Open Market's FastCGI Developer's Kit, but does
+not require you to recompile perl.
+It does require that perl is compiled with sfio though.
+Therefore you'll need at least perl 5.003_02 and you'll have
+to have configured it with eg './Configure -Duseperlio -Dusesfio' .
+
+If you don't know whether your perl has been compiled with sfio,
+you can test it with
+
+perl -V:usesfio
+
+The module currently does not check whether this is the case
+and will not compile or in any case not work if it isn't.
+
+No documentation yet.
+See http://www.fastcgi.com/ for more information about fastcgi.
+Lincoln D. Stein's perl CGI module also contains some information
+about fastcgi programming.
+
+Sven Verdoolaege
+skimo@dns.ufsia.ac.be

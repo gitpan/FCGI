@@ -1,0 +1,16 @@
+Version 0.25 -- 25 September 1996 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+
+	o First public release
+	o Additional bugfixes
+
+Version 0.21 -- 20 September 1996 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+
+	o Bugfix
+
+Version 0.2 -- 19 September 1996 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+
+	o First Version base on sfio
+
+Version 0.1 -- 12 June 1996
+
+	o Original version from Open Market's FastCGI Developer's Kit
