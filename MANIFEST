@@ -5,7 +5,7 @@ LICENSE.TERMS
 MANIFEST
 Makefile.PL
 README
-echo.fpl
+echo.PL
 fastcgi.h
 fcgi_config.h
 fcgiapp.c

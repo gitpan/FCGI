@@ -1,3 +1,8 @@
+Version 0.26 -- 19 February 1997 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+
+	o Flush output when $| is set to eliminate a problem reported
+	  by echo@echo.cica.fr
+
 Version 0.25 -- 13 October 1996 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
 
 	o Eliminate some warnings

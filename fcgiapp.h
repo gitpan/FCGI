@@ -9,7 +9,7 @@
  * See the file "LICENSE.TERMS" for information on usage and redistribution
  * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
  *
- * $Id: fcgiapp.h,v 1.14.2.2 1996/06/06 22:38:05 mbrown Exp $
+ * $Id: fcgiapp.h,v 1.15 1996/10/29 20:24:47 mbrown Exp $
  */
 
 #ifndef _FCGIAPP_H
@@ -57,7 +57,7 @@ typedef struct FCGX_Stream {
     int isReader;
     int isClosed;
     int wasFCloseCalled;
-    int errno;                /* error status */
+    int rrno;                /* error status */
     void (*fillBuffProc) (struct FCGX_Stream *stream);
     void (*emptyBuffProc) (struct FCGX_Stream *stream, int doClose);
     void *data;

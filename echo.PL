@@ -1,4 +1,10 @@
-#!/usr/local/bin/perl
+use Config;
+
+open OUT, ">echo.fpl";
+print OUT "#!$Config{perlpath}\n";
+print OUT while <DATA>;
+close OUT;
+__END__
 #
 #  echo-perl --
 # 
@@ -11,8 +17,11 @@
 # 
 #  $Id: echo-perl,v 1.1.2.1 1996/06/11 19:45:56 mbrown Exp $
 #
+# Changed by skimo to demostrate autoflushing 1997/02/19
+#
 
 use FCGI;
+$| = 1;
 
 sub print_env {
     my($label, $envp) = @_;
@@ -50,5 +59,7 @@ while(FCGI::accept() >= 0) {
         print("\n</pre><p>\n");
     }
     print_env("Request environment", \%ENV);
+    print "More on its way ... wait a few seconds\n<BR>\n<BR>";
+    sleep(3);
     print_env("Initial environment", \%initialEnv);
 }

@@ -38,7 +38,10 @@ Void_t*		buf;    /* buffer to read into */
 int		n;      /* number of bytes to read */
 Sfdisc_t*	disc;   /* discipline */
 {
-    return FCGX_PutStr(buf, n, ((FCGI_Disc *)disc)->stream);
+    n = FCGX_PutStr(buf, n, ((FCGI_Disc *)disc)->stream);
+    if (SvTRUEx(perl_get_sv("|", FALSE))) 
+	FCGX_FFlush(((FCGI_Disc *)disc)->stream);
+    return n;
 }
 
 Sfdisc_t *
@@ -234,7 +237,6 @@ set_exit_status(status)
 
     CODE:
     FCGI_SetExitStatus(status);
-
 
 int
 start_filter_data()

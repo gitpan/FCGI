@@ -12,7 +12,7 @@
  */
 
 #ifndef lint
-static const char rcsid[] = "$Id: fcgiapp.c,v 1.17.2.3 1996/06/11 00:56:22 mbrown Exp $";
+static const char rcsid[] = "$Id: fcgiapp.c,v 1.22 1996/12/11 23:58:38 gambarin Exp $";
 #endif /* not lint */
 
 #include <stdio.h>
@@ -33,11 +33,11 @@ static const char rcsid[] = "$Id: fcgiapp.c,v 1.17.2.3 1996/06/11 00:56:22 mbrow
 #include "fastcgi.h"
 
 /*
- * This is a temporary workaround for one version of the HP C compiler 
- * (c89 on HP-UX 9.04), which will dump core if given 'long double' for
- * varargs.
+ * This is a workaround for one version of the HP C compiler 
+ * (c89 on HP-UX 9.04, also Stratus FTX), which will dump core
+ * if given 'long double' for varargs.
  */
-#if defined(__hpux) && !defined(__GNUC__)
+#ifdef HAVE_VA_ARG_LONG_DOUBLE_BUG
 #define LONG_DOUBLE double
 #else
 #define LONG_DOUBLE long double
@@ -870,7 +870,7 @@ int FCGX_FClose(FCGX_Stream *stream)
             stream->rdNext = stream->stop = stream->wrNext;
         }
     }
-    return (stream->errno == 0) ? 0 : EOF;
+    return (stream->rrno == 0) ? 0 : EOF;
 }
 
 /*
@@ -884,13 +884,13 @@ int FCGX_FClose(FCGX_Stream *stream)
  *
  *----------------------------------------------------------------------
  */
-static void SetError(FCGX_Stream *stream, int errno)
+static void SetError(FCGX_Stream *stream, int rrno)
 {
     /*
      * Preserve only the first error.
      */
-    if(stream->errno == 0) {
-        stream->errno = errno;
+    if(stream->rrno == 0) {
+        stream->rrno = rrno;
         stream->isClosed = TRUE;
     }
 }
@@ -906,7 +906,7 @@ static void SetError(FCGX_Stream *stream, int errno)
  *----------------------------------------------------------------------
  */
 int FCGX_GetError(FCGX_Stream *stream) {
-    return stream->errno;
+    return stream->rrno;
 }
 
 /*
@@ -919,7 +919,7 @@ int FCGX_GetError(FCGX_Stream *stream) {
  *----------------------------------------------------------------------
  */
 void FCGX_ClearError(FCGX_Stream *stream) {
-    stream->errno = 0;
+    stream->rrno = 0;
     /*
      * stream->isClosed = FALSE;
      * XXX: should clear isClosed but work is needed to make it safe
@@ -1630,7 +1630,7 @@ static void FillBuffProc(FCGX_Stream *stream)
          */
         count = min(sizeof(header) - headerLen,
                         data->buffStop - stream->rdNext);
-        memcpy(&header + headerLen, stream->rdNext, count);
+        memcpy(((char *)(&header)) + headerLen, stream->rdNext, count);
         headerLen += count;
         stream->rdNext += count;
         if(headerLen < sizeof(header)) {
@@ -1732,7 +1732,7 @@ static FCGX_Stream *NewStream(
     stream->isReader = isReader;
     stream->isClosed = FALSE;
     stream->wasFCloseCalled = FALSE;
-    stream->errno = 0;
+    stream->rrno = 0;
     if(isReader) {
         stream->fillBuffProc = FillBuffProc;
         stream->emptyBuffProc = NULL;
@@ -1869,23 +1869,115 @@ FCGX_Stream *CreateWriter(
 static int isCGI = -1;
 
 /*
+ * fcgiSocket will hold the socket file descriptor if the call to
+ * accept below results in a connection being accepted.  This socket
+ * will be used by FCGX_Accept and then set back to -1.
+ */
+static int fcgiSocket = -1;
+union u_sockaddr {
+    struct sockaddr_un un;
+    struct sockaddr_in in;
+} static fcgiSa;
+static int fcgiClilen;
+
+/*
  *----------------------------------------------------------------------
  *
  * FCGX_IsCGI --
  *
- *      Returns TRUE iff this process appears to be a CGI process
- *      rather than a FastCGI process.
+ *      This routine determines if the process is running as a CGI or
+ *      FastCGI process.  The distinction is made by determining whether
+ *      FCGI_LISTENSOCK_FILENO is a listener socket or the end of a
+ *      pipe (ie. standard in).
+ *
+ * Results:
+ *      TRUE if the process is a CGI process, FALSE if FastCGI.
+ *
+ * Side effects:
+ *      If this is a FastCGI process there's a chance that a connection
+ *      will be accepted while performing the test.  If this occurs,
+ *      the connection is saved and used later by the FCGX_Accept logic.
  *
  *----------------------------------------------------------------------
  */
 int FCGX_IsCGI(void)
 {
-    if(isCGI == -1) {
-        struct sockaddr name;
-        int nameLen = sizeof(name);
-        int status = getpeername(FCGI_LISTENSOCK_FILENO, &name, &nameLen);
-        int isFastCGI = ((status == -1) && (errno == ENOTCONN));
-        isCGI = !isFastCGI;
+    int flags, flags1 ;
+
+    /*
+     * Already been here, no need to test again.
+     */
+    if(isCGI != -1) {
+        return isCGI;
+    }
+    
+    fcgiClilen = sizeof(fcgiSa);
+    
+    /*
+     * Put the file descriptor into non-blocking mode.
+     */
+    flags = fcntl(FCGI_LISTENSOCK_FILENO, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    if( (fcntl(FCGI_LISTENSOCK_FILENO, F_SETFL, flags)) == -1 ) {
+        /*
+         * XXX: The reason for the assert is that this call is not
+         *      supposed to return an error unless the 
+         *      FCGI_LISTENSOCK_FILENO is closed.  If it is closed
+         *      then we have an unexpected error which should cause 
+         *      the assert to pop.  The same is true for the following
+         *      asserts in this function.
+         */
+        assert(errno == 0);
+    }
+
+    /*
+     * Perform an accept() on the file descriptor.  If this is not a
+     * listener socket we will get an error.  Typically this will be
+     * ENOTSOCK but it differs from platform to platform.
+     */
+    fcgiSocket = accept(FCGI_LISTENSOCK_FILENO, (struct sockaddr *) &fcgiSa.un,
+                        &fcgiClilen);
+    if(fcgiSocket >= 0) {
+        /*
+         * This is a FastCGI listener socket because we accepted a
+         * connection.  fcgiSocket will be tested in FCGX_Accept before
+         * performing another accept so that we don't lose this state.
+         *
+         * The new connection is put into blocking mode as we're not
+         * doing asynchronous I/O.
+         */
+        flags1 = fcntl(fcgiSocket, F_GETFL, 0);
+        flags1 &= ~(O_NONBLOCK);
+        if( (fcntl(fcgiSocket, F_SETFL, flags1)) == -1 ) {
+            assert(errno == 0);
+        }
+
+        isCGI = FALSE;
+    } else {
+        /*
+         * If errno == EWOULDBLOCK then this is a valid FastCGI listener 
+         * socket without any connection pending at this time.
+	 *
+	 * NOTE: hp-ux can also return EAGAIN for listener sockets in
+	 * non-blocking mode when no connections are present.
+         */
+#if (EAGAIN != EWOULDBLOCK)
+        if((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
+#else
+        if(errno == EWOULDBLOCK) {
+#endif
+            isCGI = FALSE;
+        } else {
+            isCGI = TRUE;
+        }
+    }
+
+    /*
+     * Put the file descriptor back in blocking mode.
+     */
+    flags &= ~(O_NONBLOCK);
+    if( (fcntl(FCGI_LISTENSOCK_FILENO, F_SETFL, flags)) == -1 ) {
+        assert(errno == 0);
     }
     return isCGI;
 }
@@ -2114,8 +2206,26 @@ int FCGX_Accept(
             if(AcquireLock() < 0) {
                 return -1;
 	    }
-            reqDataPtr->socket = accept(FCGI_LISTENSOCK_FILENO,
-                    (struct sockaddr *) &sa.un, &clilen);
+	    /*
+	     * If there was a connection accepted from a prior FCGX_IsCGI
+	     * test, use it.
+	     */
+            if(fcgiSocket != -1) {
+                reqDataPtr->socket = fcgiSocket;
+                memcpy(&sa, &fcgiSa, fcgiClilen);
+                clilen = fcgiClilen;
+                /*
+                 * Clear out the fcgiSocket as we will not be needing
+                 * it later.
+                 */
+                fcgiSocket = -1;
+            } else {
+	      do {
+		  reqDataPtr->socket = accept(FCGI_LISTENSOCK_FILENO,
+					      (struct sockaddr *) &sa.un,
+					      &clilen);
+	      } while ((reqDataPtr->socket<0) && (errno==EINTR));
+            }
             if(ReleaseLock() < 0) {
                 return -1;
 	    }
