@@ -9,10 +9,15 @@ echo.PL
 remote.PL
 threaded.PL
 typemap
+version.pm
 LICENSE.TERMS
 configure
 configure.in
 install.sh
+missing
+config.sub
+config.guess
+ltmain.sh
 fcgiapp.c
 os_unix.c
 os_win32.c
