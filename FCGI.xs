@@ -92,9 +92,13 @@ FCGI_Accept(void)
         return(EOF);
     } else {
 	if(!finishCalled) {
+#ifdef USE_SFIO
             sfdcdelfcgi(sfdisc(PerlIO_stdin(), SF_POPDISC));
             sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
             sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
+#else
+	    delfcgi(&stdin);
+#endif
 	}
     }
     if(!isCGI) {
@@ -164,10 +168,10 @@ int set;
         if(set) {
             sv = newSVpv(p1 + 1, 0);
 	    /* add magic for future assignments */
-            sv_magic(sv, sv, 'e', p, p1 - p);
+//            sv_magic(sv, sv, 'e', p, p1 - p);
 	    /* call magic for this value ourselves */
-	    SvSETMAGIC(sv);
             hv_store(hv, p, p1 - p, sv, 0);
+	    SvSETMAGIC(sv);
         } else {
             hv_delete(hv, p, p1 - p, G_DISCARD);
         }

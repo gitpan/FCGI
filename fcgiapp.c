@@ -12,11 +12,24 @@
  */
 
 #ifndef lint
-static const char rcsid[] = "$Id: fcgiapp.c,v 1.22 1996/12/11 23:58:38 gambarin Exp $";
+static const char rcsid[] = "$Id: fcgiapp.c,v 1.22.2.2 1997/01/22 03:08:29 snapper Exp $";
 #endif /* not lint */
 
+#ifdef _WIN32
+#define DLLAPI  __declspec(dllexport)
+#endif
+
 #include <stdio.h>
+#include <sys/types.h>
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#endif
+
+#include "fcgi_config.h"
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
+
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,13 +37,16 @@ static const char rcsid[] = "$Id: fcgiapp.c,v 1.22 1996/12/11 23:58:38 gambarin 
 #include <errno.h>
 #include <stdarg.h>
 #include <math.h>
+#ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h> /* for getpeername */
+#endif
 #include <fcntl.h>      /* for fcntl */
 
 #include "fcgimisc.h"
 #include "fcgiapp.h"
 #include "fcgiappmisc.h"
 #include "fastcgi.h"
+#include "fcgios.h"
 
 /*
  * This is a workaround for one version of the HP C compiler 
@@ -42,6 +58,8 @@ static const char rcsid[] = "$Id: fcgiapp.c,v 1.22 1996/12/11 23:58:38 gambarin 
 #else
 #define LONG_DOUBLE long double
 #endif
+
+static int osLibInitialized = 0;
 
 static void *Malloc(size_t size)
 {
@@ -870,7 +888,7 @@ int FCGX_FClose(FCGX_Stream *stream)
             stream->rdNext = stream->stop = stream->wrNext;
         }
     }
-    return (stream->rrno == 0) ? 0 : EOF;
+    return (stream->FCGI_errno == 0) ? 0 : EOF;
 }
 
 /*
@@ -884,13 +902,13 @@ int FCGX_FClose(FCGX_Stream *stream)
  *
  *----------------------------------------------------------------------
  */
-static void SetError(FCGX_Stream *stream, int rrno)
+static void SetError(FCGX_Stream *stream, int FCGI_errno)
 {
     /*
      * Preserve only the first error.
      */
-    if(stream->rrno == 0) {
-        stream->rrno = rrno;
+    if(stream->FCGI_errno == 0) {
+        stream->FCGI_errno = FCGI_errno;
         stream->isClosed = TRUE;
     }
 }
@@ -906,7 +924,7 @@ static void SetError(FCGX_Stream *stream, int rrno)
  *----------------------------------------------------------------------
  */
 int FCGX_GetError(FCGX_Stream *stream) {
-    return stream->rrno;
+    return stream->FCGI_errno;
 }
 
 /*
@@ -919,7 +937,7 @@ int FCGX_GetError(FCGX_Stream *stream) {
  *----------------------------------------------------------------------
  */
 void FCGX_ClearError(FCGX_Stream *stream) {
-    stream->rrno = 0;
+    stream->FCGI_errno = 0;
     /*
      * stream->isClosed = FALSE;
      * XXX: should clear isClosed but work is needed to make it safe
@@ -1235,10 +1253,10 @@ static unsigned char *AlignPtr8(unsigned char *p) {
  * State associated with a request
  */
 typedef struct ReqData {
-    int socket;               /* < 0 means no connection */
+    int ipcFd;               /* < 0 means no connection */
     int isBeginProcessed;     /* FCGI_BEGIN_REQUEST seen */
     int requestId;            /* valid if isBeginProcessed */
-    int keepConnection;       /* don't close socket at end of request */
+    int keepConnection;       /* don't close ipcFd at end of request */
     int role;
     int appStatus;
     int nWriters;             /* number of open writers (0..2) */
@@ -1266,7 +1284,7 @@ typedef struct FCGX_Stream_Data {
     int skip;                 /* reader: don't deliver content bytes */
     int contentLen;           /* reader: bytes of unread content */
     int paddingLen;           /* reader: bytes of unread padding */
-    int isAnythingWritten;    /* writer: data has been written to socket */
+    int isAnythingWritten;    /* writer: data has been written to ipcFd */
     int rawWrite;             /* writer: write data without stream headers */
     ReqData *reqDataPtr;      /* request data not specific to one stream */
 } FCGX_Stream_Data;
@@ -1358,9 +1376,9 @@ static void EmptyBuffProc(struct FCGX_Stream *stream, int doClose)
     };
     if(stream->wrNext != data->buff) {
         data->isAnythingWritten = TRUE;
-        if(write(data->reqDataPtr->socket, data->buff,
+        if(OS_Write(data->reqDataPtr->ipcFd, (char *)data->buff,
                 stream->wrNext - data->buff) < 0) {
-            SetError(stream, errno);
+            SetError(stream, OS_Errno);
             return;
         }
         stream->wrNext = data->buff;
@@ -1442,9 +1460,9 @@ static int ProcessManagementRecord(int type, FCGX_Stream *stream)
         ((FCGI_UnknownTypeRecord *) response)->body
             = MakeUnknownTypeBody(type);
     }
-    if(write(data->reqDataPtr->socket,
+    if(OS_Write(data->reqDataPtr->ipcFd,
             response, FCGI_HEADER_LEN + paddedLen) < 0) {
-        SetError(stream, errno);
+        SetError(stream, OS_Errno);
         return -1;
     }
     return MGMT_RECORD;
@@ -1486,9 +1504,9 @@ static int ProcessBeginRecord(int requestId, FCGX_Stream *stream)
                 requestId, sizeof(endRequestRecord.body), 0);
         endRequestRecord.body
                 = MakeEndRequestBody(0, FCGI_CANT_MPX_CONN);
-        if(write(data->reqDataPtr->socket, (char *) &endRequestRecord,
+        if(OS_Write(data->reqDataPtr->ipcFd, (char *) &endRequestRecord,
                 sizeof(endRequestRecord)) < 0) {
-            SetError(stream, errno);
+            SetError(stream, OS_Errno);
             return -1;
         }
         return SKIP;
@@ -1561,7 +1579,7 @@ static int ProcessHeader(FCGI_Header header, FCGX_Stream *stream)
  *
  * FillBuffProc --
  *
- *      Reads bytes from the socket, supplies bytes to a stream client.
+ *      Reads bytes from the ipcFd, supplies bytes to a stream client.
  *
  *----------------------------------------------------------------------
  */
@@ -1577,9 +1595,10 @@ static void FillBuffProc(FCGX_Stream *stream)
          * If data->buff is empty, do a read.
          */
         if(stream->rdNext == data->buffStop) {
-            count = read(data->reqDataPtr->socket, data->buff, data->bufflen);
+            count = OS_Read(data->reqDataPtr->ipcFd, (char *)data->buff,
+                            data->bufflen);
             if(count <= 0) {
-                SetError(stream, (count == 0 ? FCGX_PROTOCOL_ERROR : errno));
+                SetError(stream, (count == 0 ? FCGX_PROTOCOL_ERROR : OS_Errno));
                 return;
             }
             stream->rdNext = data->buff;
@@ -1628,7 +1647,7 @@ static void FillBuffProc(FCGX_Stream *stream)
         /*
          * Fill header with bytes from the input buffer.
          */
-        count = min(sizeof(header) - headerLen,
+        count = min((int)sizeof(header) - headerLen,
                         data->buffStop - stream->rdNext);
         memcpy(((char *)(&header)) + headerLen, stream->rdNext, count);
         headerLen += count;
@@ -1689,7 +1708,7 @@ static void FillBuffProc(FCGX_Stream *stream)
  *
  * NewStream --
  *
- *      Creates a stream to read or write from an open socket.
+ *      Creates a stream to read or write from an open ipcFd.
  *      The stream performs reads/writes of up to bufflen bytes.
  *
  *----------------------------------------------------------------------
@@ -1732,7 +1751,7 @@ static FCGX_Stream *NewStream(
     stream->isReader = isReader;
     stream->isClosed = FALSE;
     stream->wasFCloseCalled = FALSE;
-    stream->rrno = 0;
+    stream->FCGI_errno = 0;
     if(isReader) {
         stream->fillBuffProc = FillBuffProc;
         stream->emptyBuffProc = NULL;
@@ -1821,7 +1840,7 @@ static FCGX_Stream *NewReader(ReqData *reqDataPtr, int bufflen, int streamType)
  * NewWriter --
  *
  *      Creates a stream to write streamType FastCGI records, using
- *      the socket and RequestId contained in *reqDataPtr.
+ *      the ipcFd and RequestId contained in *reqDataPtr.
  *      The stream performs OS writes of up to bufflen bytes.
  *
  *----------------------------------------------------------------------
@@ -1838,20 +1857,20 @@ static FCGX_Stream *NewWriter(ReqData *reqDataPtr, int bufflen, int streamType)
  * CreateWriter --
  *
  *      Creates a stream to write streamType FastCGI records, using
- *      the given socket and request Id.  This function is provided
+ *      the given ipcFd and request Id.  This function is provided
  *      for use by cgi-fcgi.  In order to be defensive against misuse,
  *      this function leaks a little storage; cgi-fcgi doesn't care.
  *
  *----------------------------------------------------------------------
  */
 FCGX_Stream *CreateWriter(
-        int socket,
+        int ipcFd,
         int requestId,
         int bufflen,
         int streamType)
 {
     ReqData *reqDataPtr = Malloc(sizeof(ReqData));
-    reqDataPtr->socket = socket;
+    reqDataPtr->ipcFd = ipcFd;
     reqDataPtr->requestId = requestId;
     /*
      * Suppress writing an FCGI_END_REQUEST record.
@@ -1867,18 +1886,7 @@ FCGX_Stream *CreateWriter(
  */
 
 static int isCGI = -1;
-
-/*
- * fcgiSocket will hold the socket file descriptor if the call to
- * accept below results in a connection being accepted.  This socket
- * will be used by FCGX_Accept and then set back to -1.
- */
-static int fcgiSocket = -1;
-union u_sockaddr {
-    struct sockaddr_un un;
-    struct sockaddr_in in;
-} static fcgiSa;
-static int fcgiClilen;
+static int isFastCGI = -1;
 
 /*
  *----------------------------------------------------------------------
@@ -1887,7 +1895,7 @@ static int fcgiClilen;
  *
  *      This routine determines if the process is running as a CGI or
  *      FastCGI process.  The distinction is made by determining whether
- *      FCGI_LISTENSOCK_FILENO is a listener socket or the end of a
+ *      FCGI_LISTENSOCK_FILENO is a listener ipcFd or the end of a
  *      pipe (ie. standard in).
  *
  * Results:
@@ -1902,8 +1910,6 @@ static int fcgiClilen;
  */
 int FCGX_IsCGI(void)
 {
-    int flags, flags1 ;
-
     /*
      * Already been here, no need to test again.
      */
@@ -1911,177 +1917,16 @@ int FCGX_IsCGI(void)
         return isCGI;
     }
     
-    fcgiClilen = sizeof(fcgiSa);
-    
-    /*
-     * Put the file descriptor into non-blocking mode.
-     */
-    flags = fcntl(FCGI_LISTENSOCK_FILENO, F_GETFL, 0);
-    flags |= O_NONBLOCK;
-    if( (fcntl(FCGI_LISTENSOCK_FILENO, F_SETFL, flags)) == -1 ) {
-        /*
-         * XXX: The reason for the assert is that this call is not
-         *      supposed to return an error unless the 
-         *      FCGI_LISTENSOCK_FILENO is closed.  If it is closed
-         *      then we have an unexpected error which should cause 
-         *      the assert to pop.  The same is true for the following
-         *      asserts in this function.
-         */
-        assert(errno == 0);
-    }
-
-    /*
-     * Perform an accept() on the file descriptor.  If this is not a
-     * listener socket we will get an error.  Typically this will be
-     * ENOTSOCK but it differs from platform to platform.
-     */
-    fcgiSocket = accept(FCGI_LISTENSOCK_FILENO, (struct sockaddr *) &fcgiSa.un,
-                        &fcgiClilen);
-    if(fcgiSocket >= 0) {
-        /*
-         * This is a FastCGI listener socket because we accepted a
-         * connection.  fcgiSocket will be tested in FCGX_Accept before
-         * performing another accept so that we don't lose this state.
-         *
-         * The new connection is put into blocking mode as we're not
-         * doing asynchronous I/O.
-         */
-        flags1 = fcntl(fcgiSocket, F_GETFL, 0);
-        flags1 &= ~(O_NONBLOCK);
-        if( (fcntl(fcgiSocket, F_SETFL, flags1)) == -1 ) {
-            assert(errno == 0);
-        }
-
-        isCGI = FALSE;
-    } else {
-        /*
-         * If errno == EWOULDBLOCK then this is a valid FastCGI listener 
-         * socket without any connection pending at this time.
-	 *
-	 * NOTE: hp-ux can also return EAGAIN for listener sockets in
-	 * non-blocking mode when no connections are present.
-         */
-#if (EAGAIN != EWOULDBLOCK)
-        if((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
-#else
-        if(errno == EWOULDBLOCK) {
-#endif
-            isCGI = FALSE;
-        } else {
-            isCGI = TRUE;
-        }
-    }
-
-    /*
-     * Put the file descriptor back in blocking mode.
-     */
-    flags &= ~(O_NONBLOCK);
-    if( (fcntl(FCGI_LISTENSOCK_FILENO, F_SETFL, flags)) == -1 ) {
-        assert(errno == 0);
-    }
-    return isCGI;
-}
-
-/*
- *----------------------------------------------------------------------
- *
- * AcquireLock --
- *
- *      On platforms that implement concurrent calls to accept
- *      on a shared listening socket, returns 0.  On other platforms,
- *	acquires an exclusive lock across all processes sharing a
- *      listening socket, blocking until the lock has been acquired.
- *
- * Results:
- *      0 for successful call, -1 in case of system error (fatal).
- *
- * Side effects:
- *      This process now has the exclusive lock.
- *
- *----------------------------------------------------------------------
- */
-static int AcquireLock(void)
-{
-#ifdef USE_LOCKING
-    struct flock lock;
-    lock.l_type = F_WRLCK;
-    lock.l_start = 0;
-    lock.l_whence = SEEK_SET;
-    lock.l_len = 0;
-
-    if(fcntl(FCGI_LISTENSOCK_FILENO, F_SETLKW, &lock) < 0) {
-        return -1;
-    }
-#endif /* USE_LOCKING */
-    return 0;
-}
-
-/*
- *----------------------------------------------------------------------
- *
- * ReleaseLock --
- *
- *      On platforms that implement concurrent calls to accept
- *      on a shared listening socket, does nothing.  On other platforms,
- *	releases an exclusive lock acquired by AcquireLock.
- *
- * Results:
- *      0 for successful call, -1 in case of system error (fatal).
- *
- * Side effects:
- *      This process no longer holds the lock.
- *
- *----------------------------------------------------------------------
- */
-static int ReleaseLock(void)
-{
-#ifdef USE_LOCKING
-    struct flock lock;
-    lock.l_type = F_UNLCK;
-    lock.l_start = 0;
-    lock.l_whence = SEEK_SET;
-    lock.l_len = 0;
-
-    if(fcntl(FCGI_LISTENSOCK_FILENO, F_SETLK, &lock) < 0) {
-        return -1;
-    }
-#endif /* USE_LOCKING */
-    return 0;
-}
-
-/*
- *----------------------------------------------------------------------
- *
- * ClientAddrOK --
- *
- *      Checks if a client address is in a list of allowed addresses
- *
- * Results:
- *	TRUE if address list is empty or client address is present
- *      in the list, FALSE otherwise.
- *
- *----------------------------------------------------------------------
- */
-static int ClientAddrOK(struct sockaddr_in *saPtr, char *clientList)
-{
-    int result = FALSE;
-    char *clientListCopy, *cur, *next;
-    if(clientList == NULL || *clientList == '\0') {
-        return TRUE;
-    }
-    clientListCopy = StringCopy(clientList);
-    for(cur = clientListCopy; cur != NULL; cur = next) {
-        next = strchr(cur, ',');
-        if(next != NULL) {
-            *next++ = '\0';
+    if(!osLibInitialized) {
+        if(OS_LibInit(NULL) == -1) {
+	    exit(OS_Errno);
 	}
-        if(inet_addr(cur) == saPtr->sin_addr.s_addr) {
-            result = TRUE;
-            break;
-        }
+	osLibInitialized = 1;
     }
-    free(clientListCopy);
-    return result;
+
+    isFastCGI = OS_IsFcgi();
+    isCGI = !isFastCGI;
+    return isCGI;
 }
 
 /*
@@ -2122,8 +1967,8 @@ void FCGX_Finish(void)
         FreeStream(&reqDataPtr->errStream);
         FreeParams(&reqDataPtr->paramsPtr);
         if(prevRequestFailed || !reqDataPtr->keepConnection) {
-            close(reqDataPtr->socket);
-            reqDataPtr->socket = -1;
+            OS_IpcClose(reqDataPtr->ipcFd);
+            reqDataPtr->ipcFd = -1;
         }
     }
 }
@@ -2169,6 +2014,19 @@ int FCGX_Accept(
      * layout, halt.
      */
     ASSERT(sizeof(FCGI_Header) == FCGI_HEADER_LEN);
+
+    if(!osLibInitialized) {
+        if(OS_LibInit(NULL) == -1) {
+	    exit(OS_Errno);
+	}
+	osLibInitialized = 1;
+    }
+
+    /*
+     * If our compiler doesn't play by the ISO rules for struct
+     * layout, halt.
+     */
+    ASSERT(sizeof(FCGI_Header) == FCGI_HEADER_LEN);
     
     if(reqDataPtr == NULL) {
 	/*
@@ -2181,7 +2039,7 @@ int FCGX_Accept(
             webServerAddressList = StringCopy(p);
 	}
         reqDataPtr = &reqData;
-        reqDataPtr->socket = -1;
+        reqDataPtr->ipcFd = -1;
         reqDataPtr->inStream = NULL;
         reqDataPtr->outStream = NULL;
         reqDataPtr->errStream = NULL;
@@ -2197,50 +2055,12 @@ int FCGX_Accept(
          * If an OS error occurs in accepting the connection,
          * return -1 to the caller, who should exit.
          */
-        if(reqDataPtr->socket < 0) {
-	    union u_sockaddr {
-		struct sockaddr_un un;
-		struct sockaddr_in in;
-	    } sa;
-            int clilen = sizeof(sa);
-            if(AcquireLock() < 0) {
-                return -1;
+        if(reqDataPtr->ipcFd < 0) {
+	    reqDataPtr->ipcFd = OS_FcgiIpcAccept(webServerAddressList);
+	    if(reqDataPtr->ipcFd < 0) {
+                reqDataPtr = NULL;
+		return -1;
 	    }
-	    /*
-	     * If there was a connection accepted from a prior FCGX_IsCGI
-	     * test, use it.
-	     */
-            if(fcgiSocket != -1) {
-                reqDataPtr->socket = fcgiSocket;
-                memcpy(&sa, &fcgiSa, fcgiClilen);
-                clilen = fcgiClilen;
-                /*
-                 * Clear out the fcgiSocket as we will not be needing
-                 * it later.
-                 */
-                fcgiSocket = -1;
-            } else {
-	      do {
-		  reqDataPtr->socket = accept(FCGI_LISTENSOCK_FILENO,
-					      (struct sockaddr *) &sa.un,
-					      &clilen);
-	      } while ((reqDataPtr->socket<0) && (errno==EINTR));
-            }
-            if(ReleaseLock() < 0) {
-                return -1;
-	    }
-            if(reqDataPtr->socket < 0) {
-                return -1;
-	    }
-            /*
-             * If the new connection uses TCP/IP, check the IP address;
-             * if the address isn't valid, close the connection and
-             * try again.
-             */
-            if(sa.in.sin_family == AF_INET
-                    && !ClientAddrOK(&sa.in, webServerAddressList)) {
-                goto TryAgain;
-            }
 	}
         /*
          * A connection is open.  Read from the connection in order to
@@ -2285,8 +2105,8 @@ int FCGX_Accept(
       TryAgain:
         FreeParams(&reqDataPtr->paramsPtr);
         FreeStream(&reqDataPtr->inStream);
-        close(reqDataPtr->socket);
-        reqDataPtr->socket = -1;
+        OS_Close(reqDataPtr->ipcFd);
+        reqDataPtr->ipcFd = -1;
     } /* for (;;) */
     /*
      * Build the remaining data structures representing the new

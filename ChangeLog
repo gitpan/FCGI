@@ -1,4 +1,9 @@
-Version 0.27 -- 24 February 1997 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+Version 0.29 -- 10 June 1997 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+
+	o Updated library files from fastcgi 2.02b
+	o Use installed library/include file if found
+
+Version 0.28 -- 24 February 1997 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
 
 	o Intialization of %ENV did not change environ. Fixed.
 	  Problem reported by Jan Drehmer <Jan.X.Drehmer@telia.se>

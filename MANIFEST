@@ -7,8 +7,12 @@ Makefile.PL
 README
 echo.PL
 fastcgi.h
-fcgi_config.h
 fcgiapp.c
 fcgiapp.h
 fcgiappmisc.h
 fcgimisc.h
+fcgios.h
+fcgi_config.h.in
+configure
+configure.in
+acconfig.h

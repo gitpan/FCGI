@@ -17,16 +17,16 @@ Lincoln D. Stein's perl CGI module also contains some information
 about fastcgi programming.
 
 See echo.fpl for an example on how to use this module.
-If you don't get any immediate output with $| set, you're
-using apache and you care about this, apply the following patch:
 
-you need to add the following line
-to DrainReqOutBuf() function in mod_fastcgi: 
-    if(!reqPtr->connection->aborted) {
-        bwrite(reqPtr->connection->client, begin, count);
-+	bflush(reqPtr->connection->client);
-    }
+To install, do the usual
 
+perl Makefile.PL
+make
+make install
+
+If Makefile.PL finds an already installed (exported) fcgi library
+it will use that instead of the included files. Edit Makefile.PL
+if you don't want that or if it doesn't find them.
 
 Sven Verdoolaege
 skimo@dns.ufsia.ac.be
