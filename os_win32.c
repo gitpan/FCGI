@@ -17,7 +17,7 @@
  *  significantly more enjoyable.)
  */
 #ifndef lint
-static const char rcsid[] = "$Id: os_win32.c,v 1.8 2000/11/05 17:09:35 robs Exp $";
+static const char rcsid[] = "$Id: os_win32.c,v 1.13 2001/03/31 01:46:32 robs Exp $";
 #endif /* not lint */
 
 #include "fcgi_config.h"
@@ -27,15 +27,18 @@ static const char rcsid[] = "$Id: os_win32.c,v 1.8 2000/11/05 17:09:35 robs Exp 
 #include <assert.h>
 #include <stdio.h>
 #include <sys/timeb.h>
-#include <windows.h>
+#include <Winsock2.h>
+#include <Windows.h>
 
 #include "fcgios.h"
 
 #define ASSERT assert
 
-#define WIN32_OPEN_MAX 32 /* XXX: Small hack */
-#define MUTEX_VARNAME "_FCGI_MUTEX_"
+#define WIN32_OPEN_MAX 128 /* XXX: Small hack */
 
+#define MUTEX_VARNAME "_FCGI_MUTEX_"
+#define SHUTDOWN_EVENT_NAME "_FCGI_SHUTDOWN_EVENT_"
+#define LOCALHOST "localhost"
 
 static HANDLE hIoCompPort = INVALID_HANDLE_VALUE;
 static HANDLE hStdinCompPort = INVALID_HANDLE_VALUE;
@@ -44,8 +47,9 @@ static HANDLE hStdinThread = INVALID_HANDLE_VALUE;
 static HANDLE stdioHandles[3] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE,
 				 INVALID_HANDLE_VALUE};
 
-static HANDLE hPipeMutex = INVALID_HANDLE_VALUE;;
-static char pipeMutexEnv[80] = "";
+static HANDLE acceptMutex = INVALID_HANDLE_VALUE;
+
+static BOOLEAN shutdownPending = FALSE;
 
 /*
  * An enumeration of the file types
@@ -89,14 +93,14 @@ struct FD_TABLE {
     LPVOID  ovList;		/* List of associated OVERLAPPED_REQUESTs */
 };
 
-typedef struct FD_TABLE *PFD_TABLE;
-
 /* 
  * XXX Note there is no dyanmic sizing of this table, so if the
  * number of open file descriptors exceeds WIN32_OPEN_MAX the 
  * app will blow up.
  */
 static struct FD_TABLE fdTable[WIN32_OPEN_MAX];
+
+static CRITICAL_SECTION  fdTableCritical;
 
 struct OVERLAPPED_REQUEST {
     OVERLAPPED overlapped;
@@ -109,11 +113,14 @@ typedef struct OVERLAPPED_REQUEST *POVERLAPPED_REQUEST;
 
 static const char *bindPathPrefix = "\\\\.\\pipe\\FastCGI\\";
 
-static int listenType = FD_UNUSED;
-static HANDLE hListen = INVALID_HANDLE_VALUE;
-static int libInitialized = 0;
+static enum FILE_TYPE listenType = FD_UNUSED;
 
-
+// XXX This should be a DESCRIPTOR
+static HANDLE hListen = INVALID_HANDLE_VALUE;
+
+static OVERLAPPED listenOverlapped;
+static BOOLEAN libInitialized = FALSE;
+
 /*
  *--------------------------------------------------------------
  *
@@ -134,64 +141,64 @@ static int libInitialized = 0;
  */
 static int Win32NewDescriptor(FILE_TYPE type, int fd, int desiredFd)
 {
-    int index;
+    int index = -1;
+
+    EnterCriticalSection(&fdTableCritical);
 
     /*
-     * If the "desiredFd" is not -1, try to get this entry for our
-     * pseudo file descriptor.  If this is not available, return -1
-     * as the caller wanted to get this mapping.  This is typically
-     * only used for mapping stdio handles.
+     * If desiredFd is set, try to get this entry (this is used for
+     * mapping stdio handles).  Otherwise try to get the fd entry.
+     * If this is not available, find a the first empty slot.  .
      */
-    if ((desiredFd >= 0) &&
-	(desiredFd < WIN32_OPEN_MAX)) {
-
-        if(fdTable[desiredFd].type == FD_UNUSED) {
-	    index = desiredFd;
-	    goto found_entry;
-        } else {
-	    return -1;
+    if (desiredFd >= 0 && desiredFd < WIN32_OPEN_MAX)
+    {
+        if (fdTable[desiredFd].type == FD_UNUSED) 
+        {
+            index = desiredFd;
+        }
 	}
+    else
+    {
+        if (fd > 0 && fd < WIN32_OPEN_MAX)
+        {
+            if (fdTable[fd].type == FD_UNUSED)
+            {
+	            index = fd;
+            }
+            else 
+            {
+                int i;
 
+                for (i = 1; i < WIN32_OPEN_MAX; ++i)
+                {
+	                if (fdTable[i].type == FD_UNUSED)
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
-    /*
-     * Next see if the entry that matches "fd" is available.
-     */
-    if ((fd > 0) &&
-	(fd < WIN32_OPEN_MAX) && (fdTable[fd].type == FD_UNUSED)) {
-	index = fd;
-	goto found_entry;
+    
+    if (index != -1) 
+    {
+        fdTable[index].fid.value = fd;
+        fdTable[index].type = type;
+        fdTable[index].path = NULL;
+        fdTable[index].Errno = NO_ERROR;
+        fdTable[index].status = 0;
+        fdTable[index].offset = -1;
+        fdTable[index].offsetHighPtr = fdTable[index].offsetLowPtr = NULL;
+        fdTable[index].hMapMutex = NULL;
+        fdTable[index].ovList = NULL;
     }
 
-    /*
-     * Scan entries for one we can use. Start at 1 (0 fake id fails
-     * in some cases). -K*
-     */
-    for (index = 1; index < WIN32_OPEN_MAX; index++)
-	if (fdTable[index].type == FD_UNUSED)
-	    break;
-
-    /* If no table entries are available, return error. */
-    if (index == WIN32_OPEN_MAX) {
-	SetLastError(WSAEMFILE);
-	DebugBreak();
-	return -1;
-    }
-
-found_entry:
-    fdTable[index].fid.value = fd;
-    fdTable[index].type = type;
-    fdTable[index].path = NULL;
-    fdTable[index].Errno = NO_ERROR;
-    fdTable[index].status = 0;
-    fdTable[index].offset = -1;
-    fdTable[index].offsetHighPtr = fdTable[index].offsetLowPtr = NULL;
-    fdTable[index].hMapMutex = NULL;
-    fdTable[index].ovList = NULL;
-
+    LeaveCriticalSection(&fdTableCritical);
     return index;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -251,7 +258,29 @@ static void StdinThread(LPDWORD startup){
     ExitThread(0);
 }
 
-
+static DWORD WINAPI ShutdownRequestThread(LPVOID arg)
+{
+    HANDLE shutdownEvent = (HANDLE) arg;
+    
+    if (WaitForSingleObject(shutdownEvent, INFINITE) == WAIT_FAILED)
+    {
+        // Assuming it will happen again, all we can do is exit the thread
+        return -1;
+    }
+    else
+    {
+        // "Simple reads and writes to properly-aligned 32-bit variables are atomic"
+        shutdownPending = TRUE;
+        
+        // Before an accept() is entered the shutdownPending flag is checked.
+        // If set, OS_Accept() will return -1.  If not, it waits
+        // on a connection request for one second, checks the flag, & repeats.
+        // Only one process/thread is allowed to do this at time by
+        // wrapping the accept() with mutex.
+        return 0;
+    }
+}
+
 /*
  *--------------------------------------------------------------
  *
@@ -273,18 +302,19 @@ int OS_LibInit(int stdioFds[3])
     WSADATA wsaData;
     int err;
     int fakeFd;
-    DWORD pipeMode;
     DWORD threadId;
     char *cLenPtr = NULL;
-    char *mutexPtr = NULL;
-
+    char *val = NULL;
+        
     if(libInitialized)
         return 0;
 
+    InitializeCriticalSection(&fdTableCritical);   
+        
     /*
      * Initialize windows sockets library.
      */
-    wVersion = MAKEWORD(1,1);
+    wVersion = MAKEWORD(2,0);
     err = WSAStartup( wVersion, &wsaData );
     if (err) {
         fprintf(stderr, "Error starting Windows Sockets.  Error: %d",
@@ -306,6 +336,35 @@ int OS_LibInit(int stdioFds[3])
     }
 
     /*
+     * If a shutdown event is in the env, save it (I don't see any to 
+     * remove it from the environment out from under the application).
+     * Spawn a thread to wait on the shutdown request.
+     */
+    val = getenv(SHUTDOWN_EVENT_NAME);
+    if (val != NULL) 
+    {
+        HANDLE shutdownEvent = (HANDLE) atoi(val);
+
+        putenv(SHUTDOWN_EVENT_NAME"=");
+
+        if (! CreateThread(NULL, 0, ShutdownRequestThread, 
+                           shutdownEvent, 0, NULL))
+        {
+            return -1;
+        }
+    }
+
+    /*
+     * If an accept mutex is in the env, save it and remove it.
+     */
+    val = getenv(MUTEX_VARNAME);
+    if (val != NULL) 
+    {
+        acceptMutex = (HANDLE) atoi(val);
+    }
+
+
+    /*
      * Determine if this library is being used to listen for FastCGI
      * connections.  This is communicated by STDIN containing a
      * valid handle to a listener object.  In this case, both the
@@ -319,9 +378,25 @@ int OS_LibInit(int stdioFds[3])
      */
     if((GetStdHandle(STD_OUTPUT_HANDLE) == INVALID_HANDLE_VALUE) &&
        (GetStdHandle(STD_ERROR_HANDLE)  == INVALID_HANDLE_VALUE) &&
-       (GetStdHandle(STD_INPUT_HANDLE)  != INVALID_HANDLE_VALUE) ) {
+       (GetStdHandle(STD_INPUT_HANDLE)  != INVALID_HANDLE_VALUE) ) 
+    {
+        DWORD pipeMode = PIPE_READMODE_BYTE | PIPE_WAIT;
+        HANDLE oldStdIn = GetStdHandle(STD_INPUT_HANDLE);
 
-        hListen = GetStdHandle(STD_INPUT_HANDLE);
+        // Move the handle to a "low" number
+        if (! DuplicateHandle(GetCurrentProcess(), oldStdIn,
+                              GetCurrentProcess(), &hListen,
+                              0, TRUE, DUPLICATE_SAME_ACCESS))
+        {
+            return -1;
+        }
+
+        if (! SetStdHandle(STD_INPUT_HANDLE, hListen))
+        {
+            return -1;
+        }
+
+        CloseHandle(oldStdIn);
 
 	/*
 	 * Set the pipe handle state so that it operates in wait mode.
@@ -332,20 +407,13 @@ int OS_LibInit(int stdioFds[3])
 	 * XXX: Initial assumption is that SetNamedPipeHandleState will
 	 *      fail if this is an IP socket...
 	 */
-        pipeMode = PIPE_READMODE_BYTE | PIPE_WAIT;
-        if(SetNamedPipeHandleState(hListen, &pipeMode, NULL, NULL)) {
+        if (SetNamedPipeHandleState(hListen, &pipeMode, NULL, NULL)) 
+        {
             listenType = FD_PIPE_SYNC;
-            /*
-             * Lookup the mutex.  If one is found, save it and
-             * remove it from the env table if it's not already
-             * been done.
-             */
-            mutexPtr = getenv(MUTEX_VARNAME);
-            if(mutexPtr != NULL) {
-                hPipeMutex = (HANDLE)atoi(mutexPtr);
-                putenv(MUTEX_VARNAME"=");
-            }
-        } else {
+            listenOverlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+        } 
+        else 
+        {
             listenType = FD_SOCKET_SYNC;
         }
     }
@@ -470,7 +538,6 @@ int OS_LibInit(int stdioFds[3])
     return 0;
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -506,7 +573,6 @@ void OS_LibShutdown()
     return;
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -526,36 +592,63 @@ static void Win32FreeDescriptor(int fd)
 {
     /* Catch it if fd is a bogus value */
     ASSERT((fd >= 0) && (fd < WIN32_OPEN_MAX));
-    ASSERT(fdTable[fd].type != FD_UNUSED);
 
-    switch (fdTable[fd].type) {
-	case FD_FILE_SYNC:
-	case FD_FILE_ASYNC:
-	    /* Free file path string */
-	    ASSERT(fdTable[fd].path != NULL);
-	    free(fdTable[fd].path);
-	    fdTable[fd].path = NULL;
-	    break;
-	default:
-	    /*
-	     * Break through to generic fdTable free-descriptor code
-	     */
-	    break;
+    EnterCriticalSection(&fdTableCritical);
+    
+    if (fdTable[fd].type != FD_UNUSED)
+    {   
+        switch (fdTable[fd].type) 
+        {
+	    case FD_FILE_SYNC:
+	    case FD_FILE_ASYNC:
+        
+	        /* Free file path string */
+	        ASSERT(fdTable[fd].path != NULL);
+	        free(fdTable[fd].path);
+	        fdTable[fd].path = NULL;
+	        break;
 
+	    default:
+	        break;
+        }
+
+        ASSERT(fdTable[fd].path == NULL);
+
+        fdTable[fd].type = FD_UNUSED;
+        fdTable[fd].path = NULL;
+        fdTable[fd].Errno = NO_ERROR;
+        fdTable[fd].offsetHighPtr = fdTable[fd].offsetLowPtr = NULL;
+
+        if (fdTable[fd].hMapMutex != NULL) 
+        {
+            CloseHandle(fdTable[fd].hMapMutex);
+            fdTable[fd].hMapMutex = NULL;
+        }
     }
-    ASSERT(fdTable[fd].path == NULL);
-    fdTable[fd].type = FD_UNUSED;
-    fdTable[fd].path = NULL;
-    fdTable[fd].Errno = NO_ERROR;
-    fdTable[fd].offsetHighPtr = fdTable[fd].offsetLowPtr = NULL;
-    if (fdTable[fd].hMapMutex != NULL) {
-        CloseHandle(fdTable[fd].hMapMutex);
-        fdTable[fd].hMapMutex = NULL;
-    }
+
+    LeaveCriticalSection(&fdTableCritical);
+
     return;
 }
 
-
+static short getPort(const char * bindPath)
+{
+    short port = 0;
+    char * p = strchr(bindPath, ':');
+
+    if (p && *++p) 
+    {
+        char buf[6];
+
+        strncpy(buf, p, 6);
+        buf[5] = '\0';
+
+        port = atoi(buf);
+    }
+ 
+    return port;
+}
+
 /*
  * OS_CreateLocalIpcFd --
  *
@@ -576,128 +669,119 @@ static void Win32FreeDescriptor(int fd)
  */
 int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
 {
-    int retFd = -1;
-    SECURITY_ATTRIBUTES     sa;
-    HANDLE hListenPipe = INVALID_HANDLE_VALUE;
-    char *localPath;
-    SOCKET listenSock;
-    int bpLen;
-    int servLen;
-    struct  sockaddr_in	sockAddr;
-    char    host[1024];
-    short   port;
-    int	    tcp = FALSE;
-    int flag = 1;
-    char    *tp;
+    int pseudoFd = -1;
+    short port = getPort(bindPath);
+    HANDLE mutex = CreateMutex(NULL, FALSE, NULL);
+    char * mutexEnvString;
 
-    strcpy(host, bindPath);
-    if((tp = strchr(host, ':')) != 0) {
-	*tp++ = 0;
-	if((port = atoi(tp)) == 0) {
-	    *--tp = ':';
-	 } else {
-	    tcp = TRUE;
-	 }
-    }
-    if(tcp && (*host && strcmp(host, "localhost") != 0)) {
-	fprintf(stderr, "To start a service on a TCP port can not "
-			"specify a host name.\n"
-			"You should either use \"localhost:<port>\" or "
-			" just use \":<port>.\"\n");
-	exit(1);
-    }
-
-    if(tcp) {
-	listenSock = socket(AF_INET, SOCK_STREAM, 0);
-        if(listenSock == SOCKET_ERROR) {
-	    return -1;
-	}
-	/*
-	 * Bind the listening socket.
-	 */
-	memset((char *) &sockAddr, 0, sizeof(sockAddr));
-	sockAddr.sin_family = AF_INET;
-	sockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	sockAddr.sin_port = htons(port);
-	servLen = sizeof(sockAddr);
-
-	if(bind(listenSock, (struct sockaddr *) &sockAddr, servLen) < 0
-	   || listen(listenSock, backlog) < 0) {
-	    perror("bind/listen");
-	    exit(errno);
-	}
-
-	retFd = Win32NewDescriptor(FD_SOCKET_SYNC, (int)listenSock, -1);
-	return retFd;
-    }
-
-
-    /*
-     * Initialize the SECURITY_ATTRIUBTES structure.
-     */
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE;       /* This will be inherited by the
-                                     * FastCGI process
-                                     */
-
-    /*
-     * Create a mutex to be used to synchronize access to accepting a
-     * connection on a named pipe.  We don't want to own this at creation
-     * time but would rather let the first process that goes for it
-     * be able to acquire it.
-     */
-    hPipeMutex = CreateMutex(NULL, FALSE, NULL);
-    if(hPipeMutex == NULL) {
+    if (mutex == NULL)
+    {
         return -1;
     }
-    if(!SetHandleInformation(hPipeMutex, HANDLE_FLAG_INHERIT,
-                                 TRUE)) {
+
+    if (! SetHandleInformation(mutex, HANDLE_FLAG_INHERIT, TRUE))
+    {
         return -1;
     }
-    sprintf(pipeMutexEnv, "%s=%d", MUTEX_VARNAME, (int)hPipeMutex);
-    putenv(pipeMutexEnv);
 
-    /*
-     * Create a unique name to be used for the socket bind path.
-     * Make sure that this name is unique and that there's no process
-     * bound to it.
-     *
-     * Named Pipe Pathname: \\.\pipe\FastCGI\OM_WS.pid.N
-     * Where: N is the pipe instance on the machine.
-     *
-     */
-    bpLen = (int)strlen(bindPathPrefix);
-    bpLen += strlen(bindPath);
-    localPath = malloc(bpLen+2);
-    strcpy(localPath, bindPathPrefix);
-    strcat(localPath, bindPath);
+    // This is a nail for listening to more than one port..
+    // This should really be handled by the caller.
 
-    /*
-     * Create and setup the named pipe to be used by the fcgi server.
-     */
-    hListenPipe = CreateNamedPipe(localPath, /* name of pipe */
-		    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-		    PIPE_TYPE_BYTE | PIPE_WAIT |
-		    PIPE_READMODE_BYTE,		/* pipe IO type */
-		    PIPE_UNLIMITED_INSTANCES,	/* number of instances */
-		    4096,			/* size of outbuf (0 == allocate as necessary) */
-		    4096,				/* size of inbuf */
-		    0, /*1000,*/		/* default time-out value */
-		    &sa);			/* security attributes */
-    free(localPath);
-    /*
-     * Can't create an instance of the pipe, fail...
-     */
-    if (hListenPipe == INVALID_HANDLE_VALUE) {
-	return -1;
+    mutexEnvString = malloc(strlen(MUTEX_VARNAME) + 7);
+    sprintf(mutexEnvString, MUTEX_VARNAME "=%d", (int) mutex);
+    putenv(mutexEnvString);
+
+    // There's nothing to be gained (at the moment) by a shutdown Event    
+
+    if (port && *bindPath != ':' && strncmp(bindPath, LOCALHOST, strlen(LOCALHOST)))
+    {
+	    fprintf(stderr, "To start a service on a TCP port can not "
+			    "specify a host name.\n"
+			    "You should either use \"localhost:<port>\" or "
+			    " just use \":<port>.\"\n");
+	    exit(1);
     }
 
-    retFd = Win32NewDescriptor(FD_PIPE_SYNC, (int)hListenPipe, -1);
-    return retFd;
+    listenType = (port) ? FD_SOCKET_SYNC : FD_PIPE_ASYNC;
+    
+    if (port) 
+    {
+        SOCKET listenSock;
+        struct  sockaddr_in	sockAddr;
+        int sockLen = sizeof(sockAddr);
+        
+        memset(&sockAddr, 0, sizeof(sockAddr));
+        sockAddr.sin_family = AF_INET;
+        sockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        sockAddr.sin_port = htons(port);
+
+        listenSock = socket(AF_INET, SOCK_STREAM, 0);
+        if (listenSock == INVALID_SOCKET) 
+        {
+	        return -1;
+	    }
+
+	    if (! bind(listenSock, (struct sockaddr *) &sockAddr, sockLen)
+	        || ! listen(listenSock, backlog)) 
+        {
+	        return -1;
+	    }
+
+        pseudoFd = Win32NewDescriptor(listenType, listenSock, -1);
+        
+        if (pseudoFd == -1) 
+        {
+            closesocket(listenSock);
+            return -1;
+        }
+
+        hListen = (HANDLE) listenSock;        
+    }
+    else
+    {
+        HANDLE hListenPipe = INVALID_HANDLE_VALUE;
+        char *pipePath = malloc(strlen(bindPathPrefix) + strlen(bindPath) + 1);
+        
+        if (! pipePath) 
+        {
+            return -1;
+        }
+
+        strcpy(pipePath, bindPathPrefix);
+        strcat(pipePath, bindPath);
+
+        hListenPipe = CreateNamedPipe(pipePath,
+		        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+		        PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_READMODE_BYTE,
+		        PIPE_UNLIMITED_INSTANCES,
+		        4096, 4096, 0, NULL);
+        
+        free(pipePath);
+
+        if (hListenPipe == INVALID_HANDLE_VALUE)
+        {
+            return -1;
+        }
+
+        if (! SetHandleInformation(hListenPipe, HANDLE_FLAG_INHERIT, TRUE))
+        {
+            return -1;
+        }
+
+        pseudoFd = Win32NewDescriptor(listenType, (int) hListenPipe, -1);
+        
+        if (pseudoFd == -1) 
+        {
+            CloseHandle(hListenPipe);
+            return -1;
+        }
+
+        hListen = (HANDLE) hListenPipe;
+    }
+
+    return pseudoFd;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -716,101 +800,115 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
  */
 int OS_FcgiConnect(char *bindPath)
 {
-    char *pipePath = NULL;
-    HANDLE hPipe;
-    int pseudoFd, err;
+    short port = getPort(bindPath);
+    int pseudoFd = -1;
+    
+    if (port) 
+    {
+	    struct hostent *hp;
+        char *host = NULL;
+        struct sockaddr_in sockAddr;
+        int sockLen = sizeof(sockAddr);
+        SOCKET sock;
+        
+        if (*bindPath != ':')
+        {
+            char * p = strchr(bindPath, ':');
+            int len = p - bindPath + 1;
 
-    struct  sockaddr_in	sockAddr;
-    int servLen, resultSock;
-    int connectStatus;
-    char    *tp;
-    char    host[1024];
-    short   port;
-    int	    tcp = FALSE;
+            host = malloc(len);
+            strncpy(host, bindPath, len);
+            host[len] = '\0';
+        }
+        
+        hp = gethostbyname(host ? host : LOCALHOST);
 
-    strcpy(host, bindPath);
-    if((tp = strchr(host, ':')) != 0) {
-	*tp++ = 0;
-	if((port = atoi(tp)) == 0) {
-	    *--tp = ':';
-	 } else {
-	    tcp = TRUE;
-	 }
+        if (host)
+        {
+            free(host);
+        }
+
+	    if (hp == NULL) 
+        {
+	        fprintf(stderr, "Unknown host: %s\n", bindPath);
+	        return -1;
+	    }
+       
+        memset(&sockAddr, 0, sizeof(sockAddr));
+        sockAddr.sin_family = AF_INET;
+	    memcpy(&sockAddr.sin_addr, hp->h_addr, hp->h_length);
+	    sockAddr.sin_port = htons(port);
+
+	    sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock == INVALID_SOCKET)
+        {
+            return -1;
+        }
+
+	    if (! connect(sock, (struct sockaddr *) &sockAddr, sockLen)) 
+        {
+	        closesocket(sock);
+	        return -1;
+	    }
+
+	    pseudoFd = Win32NewDescriptor(FD_SOCKET_SYNC, sock, -1);
+	    if (pseudoFd == -1) 
+        {
+	        closesocket(sock);
+            return -1;
+	    }
     }
-    if(tcp == TRUE) {
-	struct	hostent	*hp;
-	if((hp = gethostbyname((*host ? host : "localhost"))) == NULL) {
-	    fprintf(stderr, "Unknown host: %s\n", bindPath);
-	    exit(1000);
-	}
-	sockAddr.sin_family = AF_INET;
-	memcpy(&sockAddr.sin_addr, hp->h_addr, hp->h_length);
-	sockAddr.sin_port = htons(port);
-	servLen = sizeof(sockAddr);
-	resultSock = socket(AF_INET, SOCK_STREAM, 0);
+    else
+    {
+        char *pipePath = malloc(strlen(bindPathPrefix) + strlen(bindPath) + 1);
+        HANDLE hPipe;
+        
+        if (! pipePath) 
+        {
+            return -1;
+        }
 
-	ASSERT(resultSock >= 0);
-	connectStatus = connect(resultSock, (struct sockaddr *)
-				&sockAddr, servLen);
-	if(connectStatus < 0) {
-	    /*
-	     * Most likely (errno == ENOENT || errno == ECONNREFUSED)
-	     * and no FCGI application server is running.
-	     */
-	    closesocket(resultSock);
-	    return -1;
-	}
-	pseudoFd = Win32NewDescriptor(FD_SOCKET_SYNC, resultSock, -1);
-	if(pseudoFd == -1) {
-	    closesocket(resultSock);
-	}
-	return pseudoFd;
-    }
+        strcpy(pipePath, bindPathPrefix);
+        strcat(pipePath, bindPath);
 
-    /*
-     * Not a TCP connection, create and connect to a named pipe.
-     */
-    pipePath = malloc((size_t)(strlen(bindPathPrefix) + strlen(bindPath) + 2));
-    if(pipePath == NULL) {
-        return -1;
-    }
-    strcpy(pipePath, bindPathPrefix);
-    strcat(pipePath, bindPath);
+        hPipe = CreateFile(pipePath,
+			    GENERIC_WRITE | GENERIC_READ,
+			    FILE_SHARE_READ | FILE_SHARE_WRITE,
+			    NULL,
+			    OPEN_EXISTING,
+			    FILE_FLAG_OVERLAPPED,
+			    NULL);
 
-    hPipe = CreateFile (pipePath,
-			/* Generic access, read/write. */
-			GENERIC_WRITE | GENERIC_READ,
-			/* Share both read and write. */
-			FILE_SHARE_READ | FILE_SHARE_WRITE ,
-			NULL,                  /* No security.*/
-			OPEN_EXISTING,         /* Fail if not existing. */
-			FILE_FLAG_OVERLAPPED,  /* Use overlap. */
-			NULL);                 /* No template. */
+        free(pipePath);
 
-    free(pipePath);
-    if(hPipe == INVALID_HANDLE_VALUE) {
-        return -1;
-    }
+        if( hPipe == INVALID_HANDLE_VALUE) 
+        {
+            return -1;
+        }
 
-    if ((pseudoFd = Win32NewDescriptor(FD_PIPE_ASYNC, (int)hPipe, -1)) == -1) {
-        CloseHandle(hPipe);
-        return -1;
-    } else {
+        pseudoFd = Win32NewDescriptor(FD_PIPE_ASYNC, (int) hPipe, -1);
+        
+        if (pseudoFd == -1) 
+        {
+            CloseHandle(hPipe);
+            return -1;
+        } 
+        
         /*
-	 * Set stdin equal to our pseudo FD and create the I/O completion
-	 * port to be used for async I/O.
-	 */
-        if (!CreateIoCompletionPort(hPipe, hIoCompPort, pseudoFd, 1)) {
-	    err = GetLastError();
-	    Win32FreeDescriptor(pseudoFd);
-	    CloseHandle(hPipe);
-	    return -1;
-	}
+	     * Set stdin equal to our pseudo FD and create the I/O completion
+	     * port to be used for async I/O.
+	     */
+        if (! CreateIoCompletionPort(hPipe, hIoCompPort, pseudoFd, 1))
+        {
+	        Win32FreeDescriptor(pseudoFd);
+	        CloseHandle(hPipe);
+	        return -1;
+	    }
     }
-    return pseudoFd;
+
+    return pseudoFd;    
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -830,47 +928,48 @@ int OS_FcgiConnect(char *bindPath)
 int OS_Read(int fd, char * buf, size_t len)
 {
     DWORD bytesRead;
-    int ret;
+    int ret = -1;
 
-    /*
-     * Catch any bogus fd values
-     */
     ASSERT((fd >= 0) && (fd < WIN32_OPEN_MAX));
 
-    switch (fdTable[fd].type) {
+    switch (fdTable[fd].type) 
+    {
 	case FD_FILE_SYNC:
 	case FD_FILE_ASYNC:
 	case FD_PIPE_SYNC:
 	case FD_PIPE_ASYNC:
-	    bytesRead = fd;
-	    /*
-	     * ReadFile returns: TRUE success, FALSE failure
-	     */
-	    if (!ReadFile(fdTable[fd].fid.fileHandle, buf, len, &bytesRead,
-		NULL)) {
-		fdTable[fd].Errno = GetLastError();
-		return -1;
+
+	    if (ReadFile(fdTable[fd].fid.fileHandle, buf, len, &bytesRead, NULL)) 
+        {
+            ret = bytesRead;
+        }
+        else
+        {
+		    fdTable[fd].Errno = GetLastError();
 	    }
-	    return bytesRead;
+
+        break;
 
 	case FD_SOCKET_SYNC:
 	case FD_SOCKET_ASYNC:
-	    /* winsock recv returns n bytes recv'ed, SOCKET_ERROR failure */
-	    /*
-	     * XXX: Test this with ReadFile.  If it works, remove this code
-	     *      to simplify the routine.
-	     */
-	    if ((ret = recv(fdTable[fd].fid.sock, buf, len, 0)) ==
-		SOCKET_ERROR) {
-		fdTable[fd].Errno = WSAGetLastError();
-		return -1;
+
+        ret = recv(fdTable[fd].fid.sock, buf, len, 0);
+	    if (ret == SOCKET_ERROR) 
+        {
+		    fdTable[fd].Errno = WSAGetLastError();
+		    ret = -1;
 	    }
-	    return ret;
-	default:
-		return -1;
+
+        break;
+        
+    default:
+
+        ASSERT(0);
     }
+
+    return ret;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -890,49 +989,48 @@ int OS_Read(int fd, char * buf, size_t len)
 int OS_Write(int fd, char * buf, size_t len)
 {
     DWORD bytesWritten;
-    int ret;
+    int ret = -1;
 
-    /*
-     * Catch any bogus fd values
-     */
-    ASSERT((fd >= 0) && (fd < WIN32_OPEN_MAX));
-    ASSERT((fdTable[fd].type > FD_UNUSED) &&
-	   (fdTable[fd].type <= FD_PIPE_ASYNC));
+    ASSERT(fd >= 0 && fd < WIN32_OPEN_MAX);
 
-    switch (fdTable[fd].type) {
+    switch (fdTable[fd].type) 
+    {
 	case FD_FILE_SYNC:
 	case FD_FILE_ASYNC:
 	case FD_PIPE_SYNC:
 	case FD_PIPE_ASYNC:
-	    bytesWritten = fd;
-	    /*
-	     * WriteFile returns: TRUE success, FALSE failure
-	     */
-	    if (!WriteFile(fdTable[fd].fid.fileHandle, buf, len,
-		&bytesWritten, NULL)) {
-		fdTable[fd].Errno = GetLastError();
-		return -1;
+
+        if (WriteFile(fdTable[fd].fid.fileHandle, buf, len, &bytesWritten, NULL)) 
+        {
+            ret = bytesWritten;
+        }
+        else
+        {
+		    fdTable[fd].Errno = GetLastError();
 	    }
-	    return bytesWritten;
+
+        break;
+
 	case FD_SOCKET_SYNC:
 	case FD_SOCKET_ASYNC:
-	    /* winsock send returns n bytes written, SOCKET_ERROR failure */
-	    /*
-	     * XXX: Test this with WriteFile.  If it works, remove this code
-	     *      to simplify the routine.
-	     */
-	    if ((ret = send(fdTable[fd].fid.sock, buf, len, 0)) ==
-		SOCKET_ERROR) {
-		fdTable[fd].Errno = WSAGetLastError();
-		return -1;
+
+        ret = send(fdTable[fd].fid.sock, buf, len, 0);
+        if (ret == SOCKET_ERROR) 
+        {
+		    fdTable[fd].Errno = WSAGetLastError();
+		    ret = -1;
 	    }
-	    return ret;
-	default:
-	    return -1;
+
+        break;
+
+    default:
+
+        ASSERT(0);
     }
+
+    return ret;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -1012,7 +1110,6 @@ int OS_SpawnChild(char *execPath, int listenFd)
     }
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -1052,7 +1149,6 @@ int OS_AsyncReadStdin(void *buf, int len, OS_AsyncProc procPtr,
     return 0;
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -1129,7 +1225,7 @@ int OS_AsyncRead(int fd, int offset, void *buf, int len,
     }
     return 0;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -1231,7 +1327,6 @@ int OS_AsyncWrite(int fd, int offset, void *buf, int len,
     return 0;
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -1264,13 +1359,9 @@ int OS_Close(int fd)
 	case FD_PIPE_ASYNC:
 	case FD_FILE_SYNC:
 	case FD_FILE_ASYNC:
-	    /*
-	     * CloseHandle returns: TRUE success, 0 failure
-	     */
-	    if (CloseHandle(fdTable[fd].fid.fileHandle) == FALSE)
-		ret = -1;
 	    break;
-	case FD_SOCKET_SYNC:
+
+        case FD_SOCKET_SYNC:
 	case FD_SOCKET_ASYNC:
 	    /*
 	     * Closing a socket that has an async read outstanding causes a
@@ -1291,7 +1382,7 @@ int OS_Close(int fd)
     Win32FreeDescriptor(fd);
     return ret;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -1321,7 +1412,7 @@ int OS_CloseRead(int fd)
 	ret = -1;
     return ret;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -1384,7 +1475,51 @@ int OS_DoIo(struct timeval *tmo)
     return 0;
 }
 
-
+
+static int CALLBACK isAddrOK(LPWSABUF  lpCallerId,
+                             LPWSABUF  dc0,
+                             LPQOS     dc1,
+                             LPQOS     dc2,
+                             LPWSABUF  dc3,
+                             LPWSABUF  dc4,
+                             GROUP     *dc5,
+                             DWORD     dwCallbackData)
+{
+    const char *okAddrs = (char *) dwCallbackData;
+    struct sockaddr *sockaddr = (struct sockaddr *) lpCallerId->buf;
+
+    if (okAddrs == NULL || sockaddr->sa_family != AF_INET)
+    {
+        return TRUE;
+    }
+    else
+    {
+        static const char *token = " ,;:\t";
+        struct sockaddr_in * inet_sockaddr = (struct sockaddr_in *) sockaddr;
+        char *ipaddr = inet_ntoa(inet_sockaddr->sin_addr);
+        char *p = strstr(okAddrs, ipaddr);
+
+        if (p == NULL)
+        {
+            return FALSE;
+        }
+        else if (p == okAddrs)
+        {
+            p += strlen(ipaddr);
+            return (strchr(token, *p) != NULL);
+        }
+        else if (strchr(token, *--p))
+        {
+            p += strlen(ipaddr) + 1;
+            return (strchr(token, *p) != NULL);
+        }
+        else
+        {
+            return FALSE;
+        }
+    }
+}
+    
 /*
  *----------------------------------------------------------------------
  *
@@ -1404,110 +1539,122 @@ int OS_DoIo(struct timeval *tmo)
 int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs)
 {
     /* XXX This is broken for listen_sock & fail_on_intr */
-    struct sockaddr_in sa;
-    int isNewConnection;
     int ipcFd = -1;
     BOOL pConnected;
-    HANDLE hDup;
     SOCKET hSock;
-    int clilen = sizeof(sa);
-    DWORD waitForStatus;
 
-    switch(listenType) {
+    if (shutdownPending) 
+    {
+        return -1;
+    }
 
-    case FD_PIPE_SYNC:
-        waitForStatus = WaitForSingleObject(hPipeMutex,INFINITE);
-        switch(waitForStatus) {
-        case WAIT_OBJECT_0:
-        case WAIT_ABANDONED:
-            break;
-
-        case WAIT_FAILED:
-        default:
+    // The mutex is to keep other processes (and threads, when supported)
+    // from going into the accept cycle.  The accept cycle needs to
+    // periodically break out to check the state of the shutdown flag
+    // and there's no point to having more than one thread do that.
+    
+    if (acceptMutex != INVALID_HANDLE_VALUE) 
+    {
+        if (WaitForSingleObject(acceptMutex, INFINITE) == WAIT_FAILED) 
+        {
             return -1;
         }
+    }
+    
+    if (shutdownPending) 
+    {
+        if (acceptMutex != INVALID_HANDLE_VALUE) 
+        {
+            ReleaseMutex(acceptMutex);
+        }
+        return -1;
+    }
+    
+    if (listenType == FD_PIPE_SYNC) 
+    {
+        pConnected = ConnectNamedPipe(hListen, &listenOverlapped) 
+            ? TRUE 
+            : (GetLastError() == ERROR_PIPE_CONNECTED);
 
-        /*
-         * We have the mutex, go for the connection.
-         */
-    	pConnected = ConnectNamedPipe(hListen, NULL) ?
-	                      TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
-
-        ReleaseMutex(hPipeMutex);
-	    if(pConnected) {
-	        /*
-	         * Success...
-	         */
-	        if (!DuplicateHandle(GetCurrentProcess(), hListen,
-				 GetCurrentProcess(), &hDup, 0,
-				 TRUE,		/* allow inheritance */
-				 DUPLICATE_SAME_ACCESS)) {
-	            return -1;
-	        }
-	        ipcFd = Win32NewDescriptor(FD_PIPE_SYNC, (int)hDup, -1);
-	        if(ipcFd == -1) {
-                DisconnectNamedPipe(hListen);
-                CloseHandle(hDup);
+        if (! pConnected) 
+        {
+            while (WaitForSingleObject(listenOverlapped.hEvent, 1000) == WAIT_TIMEOUT) 
+            {
+                if (shutdownPending) 
+                {
+                    if (acceptMutex != INVALID_HANDLE_VALUE) 
+                    {
+                        ReleaseMutex(acceptMutex);
+                    }
+                    CancelIo(hListen);
+                    return -1;
+                }            
             }
-            return ipcFd;
-        } else {
+        }
+        
+        if (acceptMutex != INVALID_HANDLE_VALUE) 
+        {
+            ReleaseMutex(acceptMutex);
+        }
+
+        ipcFd = Win32NewDescriptor(FD_PIPE_SYNC, (int) hListen, -1);
+	    if (ipcFd == -1) 
+        {
+            DisconnectNamedPipe(hListen);
+        }
+    }
+    else if (listenType == FD_SOCKET_SYNC)
+    {
+        struct sockaddr sockaddr;
+        int sockaddrLen = sizeof(sockaddr);
+        fd_set readfds;
+        const struct timeval timeout = {1, 0};
+     
+        FD_ZERO(&readfds);
+        FD_SET((unsigned int) hListen, &readfds);
+        
+        while (select(0, &readfds, NULL, NULL, &timeout) == 0)
+        {
+            if (shutdownPending) 
+            {
+                return -1;
+            }
+        }
+        
+        hSock = (webServerAddrs == NULL)
+            ? accept((SOCKET) hListen, 
+                              &sockaddr, 
+                              &sockaddrLen)
+            : WSAAccept((unsigned int) hListen,                    
+                                       &sockaddr,  
+                                       &sockaddrLen,               
+                                       isAddrOK,  
+                               (DWORD) webServerAddrs);
+        
+        if (acceptMutex != INVALID_HANDLE_VALUE) 
+        {
+            ReleaseMutex(acceptMutex);
+        }
+
+        if (hSock == -1) 
+        {
             return -1;
-    }
-	break;
-
-    case FD_SOCKET_SYNC:
-	hSock = accept((int)hListen, (struct sockaddr *) &sa, &clilen);
-	if(hSock == -1) {
-	    return -1;
-	} else if (sa.sin_family != AF_INET) { /* What are we? */
-	    closesocket(hSock);
-	    hSock = (SOCKET)-1;
-	    return -1;
-	} else {
-	    char	*tp1, *tp2;
-	    int	match = 0;
-	    if (webServerAddrs == NULL)
-	        isNewConnection = TRUE;
-	    else {
-	        tp1 = (char *) malloc(strlen(webServerAddrs)+1);
-            ASSERT(tp1 != NULL);
-		strcpy(tp1, webServerAddrs);
-		while(tp1) {
-		    if ((tp2 = strchr(tp1, ',')) != NULL)
-		        *tp2++ = 0;
-
-		    if (inet_addr(tp1) == sa.sin_addr.s_addr) {
-		        match = 1;
-			break;
-		    }
-		    tp1 = tp2;
-		}
-		free(tp1);
-		if (match)
-		    isNewConnection = TRUE;
-		else {
-		    closesocket(hSock);
-		    hSock = (SOCKET)-1;
-		    return -1;
-		}
+        }
+        
+        ipcFd = Win32NewDescriptor(FD_SOCKET_SYNC, hSock, -1);
+	    if (ipcFd == -1) 
+        {
+	        closesocket(hSock);
 	    }
-	}
-
-	ipcFd = Win32NewDescriptor(FD_SOCKET_SYNC, hSock, -1);
-	if(ipcFd == -1) {
-	    closesocket(hSock);
-	}
-	return ipcFd;
-	break;
-
-    case FD_UNUSED:
-      default:
-        exit(101);
-	break;
-
     }
+    else
+    {
+        ASSERT(0);
+    }
+	    
+    return ipcFd;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1563,7 +1710,6 @@ int OS_IpcClose(int ipcFd)
     }
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -1581,15 +1727,12 @@ int OS_IpcClose(int ipcFd)
  */
 int OS_IsFcgi(int sock)
 {
-    /* XXX This is broken for sock */
-    if(listenType == FD_UNUSED) {
-        return FALSE;
-    } else {
-        return TRUE;
-    }
+    // This is still broken.  There is not currently a way to differentiate
+    // a CGI from a FCGI pipe (try the Unix method).
+    
+    return (fdTable[sock].type != FD_UNUSED);
 }
 
-
 /*
  *----------------------------------------------------------------------
  *

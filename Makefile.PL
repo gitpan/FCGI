@@ -1,9 +1,10 @@
-# $Id: Makefile.PL,v 1.8 2000/12/31 21:46:59 skimo Exp $
+# $Id: Makefile.PL,v 1.11 2001/06/08 15:09:47 skimo Exp $
 
 use ExtUtils::MakeMaker;
 use IO::File;
 use Config;
 use Cwd 'cwd';
+use Getopt::Long;
 
 @h1 = qw(fastcgi.h fcgiapp.h fcgiappmisc.h fcgimisc.h fcgios.h);
 @h = (@h1, 'fcgi_config.h');
@@ -12,9 +13,10 @@ use Cwd 'cwd';
 @dist2 = qw(fcgiapp.c os_unix.c os_win32.c);
 @dist3 = (@h1, qw(fcgi_config.h.in fcgi_config_x86.h));
 
+GetOptions ("pure-perl!" => \$pure);
 $pure = 
     (prompt("Do you want to use the pure perl implementation", "no") =~ /^y/) 
-    ? "1" : "0";
+    ? "1" : "0" unless defined $pure;
 open(CFG,">FCGI.cfg");
 print CFG "\$pure = $pure;1;\n";
 close CFG;
@@ -69,7 +71,10 @@ $plfiles = { 'echo.PL' => 'echo.fpl',
 	     'FCGI.PL' => 'FCGI.pm',
 	   };
 $plfiles->{'FCGI.XL'} = 'FCGI.xs' unless $pure;
-unless ($pure) {
+if ($pure) {
+    push @extras,
+	LINKTYPE => ' ';
+} else {
     push @extras,
 	'LIBS'	=> [ @libs ],
 	'OBJECT'	=> "@o",
@@ -78,6 +83,11 @@ unless ($pure) {
         
 # See lib/ExtUtils/MakeMaker.pm for details of how to influence
 # the contents of the Makefile that is written.
+
+# Work around bug in previous versions of MakeMaker
+WriteMakefile(NAME => 'FCGI') 
+    if $ExtUtils::MakeMaker::VERSION <= 5.4302;
+
 $mm = MM->new({
     'NAME'		=> 'FCGI',
     'VERSION_FROM'	=> 'FCGI.PL',
@@ -93,8 +103,9 @@ $mm = MM->new({
 			      'POSTOP' => 
 				'$(MV) MANIFEST.old MANIFEST',
 			    },
-    'clean'		=> { FILES => 'config.cache fcgi_config.h FCGI.pm' . 
-				      ' FCGI.xs FCGI.c FCGI.cfg' },
+    'clean'		=> { FILES => 'config.cache fcgi_config.h' . 
+				      ' FCGI.xs FCGI.c FCGI.cfg ' .
+				      (join ' ', values %$plfiles)},
     'PL_FILES'		=> $plfiles,
     PM			=> {'FCGI.pm' => '$(INST_ARCHLIBDIR)/FCGI.pm'},
     @extras,
@@ -103,7 +114,7 @@ $mm = MM->new({
 delete $mm->{MAN3PODS}{oldinterface.pod};
 $mm->flush;
 
-exit if -f 'fcgi_config.h' or $prefix;
+exit if -f 'fcgi_config.h' or $prefix or $pure;
 
 # CPAN and no installed lib found
 if ($sys eq "win32") {

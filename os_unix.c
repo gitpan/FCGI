@@ -17,7 +17,7 @@
  */
 
 #ifndef lint
-static const char rcsid[] = "$Id: os_unix.c,v 1.21 2000/11/05 17:09:35 robs Exp $";
+static const char rcsid[] = "$Id: os_unix.c,v 1.25 2001/04/30 15:00:50 skimo Exp $";
 #endif /* not lint */
 
 #include "fcgi_config.h"
@@ -68,6 +68,10 @@ static const char rcsid[] = "$Id: os_unix.c,v 1.21 2000/11/05 17:09:35 robs Exp 
 #define TRUE 1
 #endif
 
+#ifndef INADDR_NONE
+#define INADDR_NONE ((unsigned long) -1)
+#endif
+
 /*
  * This structure holds an entry for each oustanding async I/O operation.
  */
@@ -105,7 +109,6 @@ static fd_set writeFdSetPost;
 static int numWrPosted = 0;
 static int volatile maxFd = -1;
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -146,7 +149,6 @@ int OS_LibInit(int stdioFds[3])
     return 0;
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -173,7 +175,6 @@ void OS_LibShutdown()
     return;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -220,13 +221,11 @@ static int OS_BuildSockAddrUn(const char *bindPath,
 #endif
     return 0;
 }
-
 union SockAddrUnion {
     struct  sockaddr_un	unixVariant;
     struct  sockaddr_in	inetVariant;
 };
 
-
 /*
  * OS_CreateLocalIpcFd --
  *
@@ -249,6 +248,7 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
     int listenSock, servLen;
     union   SockAddrUnion sa;
     int	    tcp = FALSE;
+    unsigned long tcp_ia;
     char    *tp;
     short   port;
     char    host[MAXPATHLEN];
@@ -262,12 +262,26 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
 	    tcp = TRUE;
 	 }
     }
-    if(tcp && (*host && strcmp(host, "localhost") != 0)) {
-	fprintf(stderr, "To start a service on a TCP port can not "
-			"specify a host name.\n"
-			"You should either use \"localhost:<port>\" or "
-			" just use \":<port>.\"\n");
-	exit(1);
+    if(tcp) {
+      if (!*host || !strcmp(host,"*")) {
+	tcp_ia = htonl(INADDR_ANY);
+      } else {
+	tcp_ia = inet_addr(host);
+	if (tcp_ia == INADDR_NONE) {
+	  struct hostent * hep;
+	  hep = gethostbyname(host);
+	  if ((!hep) || (hep->h_addrtype != AF_INET || !hep->h_addr_list[0])) {
+	    fprintf(stderr, "Cannot resolve host name %s -- exiting!\n", host);
+	    exit(1);
+	  }
+	  if (hep->h_addr_list[1]) {
+	    fprintf(stderr, "Host %s has multiple addresses ---\n", host);
+	    fprintf(stderr, "you must choose one explicitly!!!\n");
+	    exit(1);
+	  }
+	  tcp_ia = ((struct in_addr *) (hep->h_addr))->s_addr;
+	}
+      }
     }
 
     if(tcp) {
@@ -293,7 +307,7 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
     if(tcp) {
 	memset((char *) &sa.inetVariant, 0, sizeof(sa.inetVariant));
 	sa.inetVariant.sin_family = AF_INET;
-	sa.inetVariant.sin_addr.s_addr = htonl(INADDR_ANY);
+	sa.inetVariant.sin_addr.s_addr = tcp_ia;
 	sa.inetVariant.sin_port = htons(port);
 	servLen = sizeof(sa.inetVariant);
     } else {
@@ -312,7 +326,6 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
     return listenSock;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -386,7 +399,6 @@ int OS_FcgiConnect(char *bindPath)
     }
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -407,7 +419,7 @@ int OS_Read(int fd, char * buf, size_t len)
 {
     return(read(fd, buf, len));
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -429,7 +441,6 @@ int OS_Write(int fd, char * buf, size_t len)
     return(write(fd, buf, len));
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -495,7 +506,6 @@ int OS_SpawnChild(char *appPath, int listenFd)
     return 0;
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -552,7 +562,6 @@ static void GrowAsyncTable(void)
 
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -603,7 +612,7 @@ int OS_AsyncRead(int fd, int offset, void *buf, int len,
     FD_SET(fd, &readFdSet);
     return 0;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -652,7 +661,7 @@ int OS_AsyncWrite(int fd, int offset, void *buf, int len,
     FD_SET(fd, &writeFdSet);
     return 0;
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -696,7 +705,7 @@ int OS_Close(int fd)
     }
     return close(fd);
 }
-
+
 /*
  *--------------------------------------------------------------
  *
@@ -721,7 +730,6 @@ int OS_CloseRead(int fd)
     return shutdown(fd, 0);
 }
 
-
 /*
  *--------------------------------------------------------------
  *
@@ -852,7 +860,6 @@ char * str_dup(const char * str)
     return sdup;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -892,7 +899,6 @@ static int ClientAddrOK(struct sockaddr_in *saPtr, const char *clientList)
     return result;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -931,7 +937,7 @@ static int AcquireLock(int sock, int fail_on_intr)
     return 0;
 #endif
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -970,7 +976,6 @@ static int ReleaseLock(int sock)
 #endif
 }
 
-
 /**********************************************************************
  * Determine if the errno resulting from a failed accept() warrants a
  * retry or exit().  Based on Apache's http_main.c accept() handling
@@ -1126,7 +1131,7 @@ int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs)
 
     return (socket);
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1147,7 +1152,6 @@ int OS_IpcClose(int ipcFd)
     return OS_Close(ipcFd);
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -1175,6 +1179,8 @@ int OS_IsFcgi(int sock)
     int len = sizeof(sa);
 #endif
 
+    errno = 0;
+
     if (getpeername(sock, (struct sockaddr *)&sa, &len) != 0 && errno == ENOTCONN) {
         return TRUE;
     }
@@ -1182,7 +1188,7 @@ int OS_IsFcgi(int sock)
         return FALSE;
     }
 }
-
+
 /*
  *----------------------------------------------------------------------
  *

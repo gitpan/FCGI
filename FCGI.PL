@@ -6,7 +6,7 @@ open OUT, ">FCGI.pm";
 
 print "Generating FCGI.pm\n";
 print OUT <<'EOP';
-# $Id: FCGI.PL,v 1.22 2000/12/31 21:56:10 skimo Exp $
+# $Id: FCGI.PL,v 1.25 2001/06/07 13:17:56 skimo Exp $
 
 package FCGI;
 
@@ -21,7 +21,7 @@ require DynaLoader;
 	
 );
 
-$VERSION = '0.59';
+$VERSION = '0.60';
 
 EOP
 
@@ -61,6 +61,7 @@ sub read_nv_len {
     return undef unless read $stream, $buf, 1, 0;
     my ($len) = unpack("C", $buf);
     if ($len & 0x80) {
+	$buf = pack("C", $len & 0x7F);
 	return undef unless read $stream, $buf, 3, 1;
 	$len = unpack("N", $buf);
     }
@@ -331,6 +332,9 @@ sub PRINTF {
   shift->PRINT(sprintf(shift, @_));
 }
 
+sub BINMODE {
+}
+
 sub READLINE {
     my $stream = shift;
     my ($s, $c);
@@ -415,6 +419,14 @@ Can be the result of the OpenSocket function.
 For the moment, it's the file descriptor of the socket
 that should be passed. This may change in the future.
 
+You should only use your own socket if your program
+is not started by a process manager such as mod_fastcgi
+(except for the FastCgiExternalServer case) or cgi-fcgi. 
+If you use the option, you have to let your FastCGI
+server know which port (and possibly server) your program
+is listening on.
+See remote.pl for an example.
+
 =item flags (default: 0)
 
 Possible values:
@@ -449,6 +461,11 @@ Creates a socket suitable to use as an argument to Request.
 =item path
 
 Pathname of socket or colon followed by local tcp port.
+Note that some systems take file permissions into account
+on Unix domain sockets, so you'll have to make sure that
+the server can write to the created file, by changing
+the umask before the call and/or changing permissions and/or
+group of the file afterwards.
 
 =item backlog
 
