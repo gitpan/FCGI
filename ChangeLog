@@ -1,3 +1,9 @@
+Version 0.31 -- 13 July 1997  <skimo@breughel.ufsia.ac.be> Sven Verdoolaege
+
+	o Applied solaris accept patch from
+	  Chip Salzenberg <chip@rio.atlantic.net>
+	o Preliminary support glibc's cookie mechanism
+
 Version 0.30 -- 24 June 1997  <skimo@dns.ufsia.ac.be> Sven Verdoolaege
 
 	o Added forgotten library files

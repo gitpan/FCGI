@@ -4,7 +4,12 @@ use Config;
 
 if ($Config{'usesfio'} ne 'true' or $Config{'useperlio'} ne 'define') {
     print "Your perl isn't compiled with perlio/sfio support.\n";
-    exit 1;
+    if ($Config{'d_gnulibc'} eq 'define') {
+	print "Still, you have glibc, so this might work.\n";
+    }
+    else {
+	exit 1;
+    }
 }
 
 @h = qw(fastcgi.h fcgiapp.h fcgiappmisc.h fcgimisc.h fcgi_config.h);
@@ -29,7 +34,7 @@ $inc = $prefix ? "-I$prefix/include" : '-I.';
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.30',
+    'VERSION'	=> '0.31',
     'LIBS'	=> [ @libs ],
     'OBJECT'	=> "@o",
     'INC'	=> $inc,

@@ -4,6 +4,10 @@
 
 #include "fcgiapp.h"
 
+#ifndef USE_SFIO
+#include <fcntl.h>
+#endif
+
 #ifndef FALSE
 #define FALSE (0)
 #endif
@@ -15,6 +19,7 @@
 extern char **environ;
 static char **requestEnviron = NULL;
 
+#ifdef USE_SFIO
 typedef struct
 {
     Sfdisc_t	disc;
@@ -68,6 +73,33 @@ sfdcdelfcgi(disc)
     Safefree(disc);
     return 0;
 }
+#else
+
+static ssize_t
+fcgiread(cookie, buf, n)
+void *	cookie;
+void *	buf;
+size_t	n;
+{
+    return FCGX_GetStr(buf, n, (FCGX_Stream *)cookie);
+}
+
+static ssize_t
+fcgiwrite(cookie, buf, n)
+void *		cookie;
+const void *	buf;
+size_t		n;
+{
+    n = FCGX_PutStr(buf, n, (FCGX_Stream *)cookie);
+    if (SvTRUEx(perl_get_sv("|", FALSE))) 
+	FCGX_FFlush((FCGX_Stream *)cookie);
+    return n;
+}
+
+cookie_io_functions_t fcgi_functions = {fcgiread, fcgiwrite, 
+    (_IO_fpos_t (*) __P((struct _IO_FILE *, _IO_off_t, int))) NULL, 
+    (int (*) __P ((struct _IO_FILE *))) NULL};
+#endif
 
 static int acceptCalled = FALSE;
 static int finishCalled = FALSE;
@@ -97,20 +129,40 @@ FCGI_Accept(void)
             sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
             sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
 #else
-	    delfcgi(&stdin);
+	    fflush(stdout);
+	    fflush(stderr);
 #endif
 	}
     }
     if(!isCGI) {
         FCGX_Stream *out, *error;
         FCGX_ParamArray envp;
+#ifndef USE_SFIO
+	int sin, sout;
+	static int protect = TRUE;
+#endif
         int acceptResult = FCGX_Accept(&in, &out, &error, &envp);
         if(acceptResult < 0) {
             return acceptResult;
         }
+#ifdef USE_SFIO
         sfdisc(PerlIO_stdin(), sfdcnewfcgi(in));
         sfdisc(PerlIO_stdout(), sfdcnewfcgi(out));
         sfdisc(PerlIO_stderr(), sfdcnewfcgi(error));
+#else
+	/* avoid closing the FCGI_LISTENSOCK_FILENO */
+	if (protect) {
+	    sin = fcntl(0, F_DUPFD, 3); sout = fcntl(1, F_DUPFD, 3);
+	}
+	freopencookie((void *)in, "r", fcgi_functions, stdin);
+	freopencookie((void *)out, "w", fcgi_functions, stdout);
+	freopencookie((void *)error, "w", fcgi_functions, stderr);
+	if (protect) {
+	    dup2(sin, 0); dup2(sout, 1);
+	    close(sin); close(sout);
+	    protect = FALSE;
+	}
+#endif
 	finishCalled = FALSE;
         environ = envp;
     }
@@ -123,9 +175,14 @@ FCGI_Finish(void)
     if(!acceptCalled || isCGI) {
 	return;
     }
+#ifdef USE_SFIO
     sfdcdelfcgi(sfdisc(PerlIO_stdin(), SF_POPDISC));
     sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
     sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
+#else
+    fflush(stdout);
+    fflush(stderr);
+#endif
     in = NULL;
     FCGX_Finish();
     environ = NULL;
@@ -167,8 +224,6 @@ int set;
         *p1 = '\0';
         if(set) {
             sv = newSVpv(p1 + 1, 0);
-	    /* add magic for future assignments */
-//            sv_magic(sv, sv, 'e', p, p1 - p);
 	    /* call magic for this value ourselves */
             hv_store(hv, p, p1 - p, sv, 0);
 	    SvSETMAGIC(sv);
@@ -186,6 +241,7 @@ MODULE = FCGI		PACKAGE = FCGI
 int
 accept()
 
+    PROTOTYPE:
     CODE:
     {
         char **savedEnviron;
@@ -221,6 +277,7 @@ accept()
 void
 finish()
 
+    PROTOTYPE:
     CODE:
     {
         /*
@@ -242,12 +299,14 @@ set_exit_status(status)
 
     int status;
 
+    PROTOTYPE:
     CODE:
     FCGI_SetExitStatus(status);
 
 int
 start_filter_data()
 
+    PROTOTYPE:
     CODE:
     RETVAL = FCGI_StartFilterData();
 
