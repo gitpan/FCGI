@@ -1,6 +1,7 @@
 ChangeLog
 FCGI.pm
 FCGI.xs
+INSTALL
 LICENSE.TERMS
 MANIFEST
 Makefile.PL

@@ -1,4 +1,18 @@
-Version 0.36 -- 27 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+Version 0.40 -- 15 July 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o Added default die hook
+	o Minimal documentation
+
+Version 0.39 -- 3 July 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o Fixed read bug
+
+Version 0.38 -- 28 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o Fixed flush bug
+	o Added default warn hook
+
+Version 0.37 -- 27 June 1998  <skimo@kotnet.org> Sven Verdoolaege
 
 	o More support for tied handles
 	o Added flush function

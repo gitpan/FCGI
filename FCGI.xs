@@ -40,8 +40,7 @@ size_t		n;      /* number of bytes to read */
 Sfdisc_t*	disc;   /* discipline */
 {
     n = FCGX_PutStr(buf, n, ((FCGI_Disc *)disc)->stream);
-    if (SvTRUEx(perl_get_sv("|", FALSE))) 
-	FCGX_FFlush(((FCGI_Disc *)disc)->stream);
+    FCGX_FFlush(((FCGI_Disc *)disc)->stream);
     return n;
 }
 
@@ -80,6 +79,9 @@ static SV *svout = NULL, *svin, *sverr;
 static int 
 FCGI_Flush(void)
 {
+    if(!acceptCalled || isCGI) {
+	return;
+    }
 #ifdef USE_SFIO
     sfsync(PerlIO_stdout());
     sfsync(PerlIO_stderr());
@@ -142,6 +144,10 @@ FCGI_Accept(void)
 	sv_setiv(SvRV(svout), (IV) out);
 	sv_setiv(SvRV(sverr), (IV) error);
 	sv_setiv(SvRV(svin), (IV) in);
+	if (warnhook) SvREFCNT_dec(warnhook);
+	warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
+	if (diehook) SvREFCNT_dec(diehook);
+	diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
 #endif
 	finishCalled = FALSE;
         environ = envp;
@@ -166,6 +172,14 @@ FCGI_Finish(void)
     FCGX_Finish();
     environ = NULL;
     finishCalled = TRUE;
+    if (warnhook) {
+	SvREFCNT_dec(warnhook);
+	warnhook = Nullsv;
+    }
+    if (diehook) {
+	SvREFCNT_dec(diehook);
+	diehook = Nullsv;
+    }
 }
 
 static int 
@@ -220,6 +234,13 @@ MODULE = FCGI		PACKAGE = FCGI
 
 #ifndef USE_SFIO
 void
+WARN(msg)
+	char *	msg;
+
+	CODE:
+	FCGX_PutS(msg, (FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
+
+void
 PRINT(stream, ...)
 	FCGI	stream;
 
@@ -259,16 +280,17 @@ WRITE(stream, bufsv, len, ...)
 	}
 
 int
-READ(stream, bufsv, len, offset)
+READ(stream, bufsv, len, ...)
 	FCGI	stream;
 	SV *	bufsv;
 	int	len;
-	int	offset;
 
 	PREINIT:
+	int	offset;
 	char *	buf;
 
 	CODE:
+	offset = (items == 4) ? (int)SvIV(ST(3)) : 0;
 	if (! SvOK(bufsv))
 	    sv_setpvn(bufsv, "", 0);
 	buf = SvGROW(bufsv, len+offset+1);

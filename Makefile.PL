@@ -24,13 +24,17 @@ $inc = $prefix ? "-I$prefix/include" : '-I.';
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.37',
+    'VERSION'	=> '0.40',
     'LIBS'	=> [ @libs ],
     'OBJECT'	=> "@o",
     'INC'	=> $inc,
     'dist'	=> {'COMPRESS'=>'gzip -9f', 'SUFFIX'=>'gz'},
+    'clean'	=> { FILES =>'config.cache fcgi_config.h' },
 );
 
 exit if -f 'fcgi_config.h' or $prefix;
+
+print "Running ./configure for you\n";
+print "Please read INSTALL for information on how to run it yourself\n";
 
 system("./configure");
