@@ -274,6 +274,8 @@ PRINT(stream, ...)
 	CODE:
 	for (n = 1; n < items; ++n)
 	    FCGX_PutS((char *)SvPV(ST(n),na), stream);
+	if (SvTRUEx(perl_get_sv("|", FALSE))) 
+	    FCGX_FFlush(stream);
 
 int
 READ(stream, bufsv, len, offset)
@@ -298,6 +300,19 @@ READ(stream, bufsv, len, offset)
 
 	OUTPUT:
 	RETVAL
+
+SV *
+GETC(stream)
+	FCGI	stream;
+
+	PREINIT:
+	int	retval;
+
+	CODE:
+	if ((retval = FCGX_GetChar(stream)) != -1) {
+	    ST(0) = sv_newmortal();
+	    sv_setpvn(ST(0), (char *)&retval, 1);
+	} else ST(0) = &sv_undef;
 
 #endif
 

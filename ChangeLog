@@ -1,3 +1,7 @@
+Version 0.36 -- 23 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o More support for tied handles (GETC and autoflushing)
+
 Version 0.35 -- 22 June 1998  <skimo@kotnet.org> Sven Verdoolaege
 
 	o Added forgotten typemap
