@@ -9,7 +9,7 @@ if ($Config{'usesfio'} ne 'true' or $Config{'useperlio'} ne 'define') {
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.27',
+    'VERSION'	=> '0.28',
     'OBJECT'	=> 'fcgiapp.o FCGI.o',
     'dist'	=> {'COMPRESS'=>'gzip -9f', 'SUFFIX'=>'gz'},
 );

@@ -4,6 +4,7 @@ open OUT, ">echo.fpl";
 print OUT "#!$Config{perlpath}\n";
 print OUT while <DATA>;
 close OUT;
+chmod 0755, "echo.fpl";
 __END__
 #
 #  echo-perl --

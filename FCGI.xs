@@ -163,7 +163,10 @@ int set;
         *p1 = '\0';
         if(set) {
             sv = newSVpv(p1 + 1, 0);
+	    /* add magic for future assignments */
             sv_magic(sv, sv, 'e', p, p1 - p);
+	    /* call magic for this value ourselves */
+	    SvSETMAGIC(sv);
             hv_store(hv, p, p1 - p, sv, 0);
         } else {
             hv_delete(hv, p, p1 - p, G_DISCARD);
