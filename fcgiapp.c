@@ -11,7 +11,7 @@
  *
  */
 #ifndef lint
-static const char rcsid[] = "$Id: fcgiapp.c,v 1.30 2001/09/14 19:43:26 robs Exp $";
+static const char rcsid[] = "$Id: fcgiapp.c,v 1.32 2001/11/21 21:03:35 robs Exp $";
 #endif /* not lint */
 
 #include <assert.h>

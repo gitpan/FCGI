@@ -9,7 +9,7 @@
  * See the file "LICENSE.TERMS" for information on usage and redistribution
  * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
  *
- * $Id: fcgiapp.h,v 1.10 2001/09/14 19:43:31 robs Exp $
+ * $Id: fcgiapp.h,v 1.12 2001/11/21 21:10:11 robs Exp $
  */
 
 #ifndef _FCGIAPP_H
@@ -22,16 +22,16 @@
 #include <varargs.h>
 #endif
 
-#if defined (c_plusplus) || defined (__cplusplus)
-extern "C" {
-#endif
-
 #ifndef DLLAPI
 #ifdef _WIN32
 #define DLLAPI __declspec(dllimport)
 #else
 #define DLLAPI
 #endif
+#endif
+
+#if defined (c_plusplus) || defined (__cplusplus)
+extern "C" {
 #endif
 
 /*
