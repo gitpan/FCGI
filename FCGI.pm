@@ -13,13 +13,69 @@ require DynaLoader;
 	
 );
 
-$VERSION = '0.46';
+$VERSION = '0.47';
 
 bootstrap FCGI;
 
 # Preloaded methods go here.
 
 # Autoload methods go after __END__, and are processed by the autosplit program.
+
+sub request() {
+    Request();
+}
+
+sub accept(;$***$) {
+    return Accept(@_) if @_ == 5;
+
+    if (defined %FCGI::ENV) {
+	%ENV = %FCGI::ENV;
+    } else {
+	%FCGI::ENV = %ENV;
+    }
+    my $rc = Accept($global_request, \*STDIN, \*STDOUT, \*STDERR, \%ENV);
+
+    # not SFIO
+    $SIG{__WARN__} = $SIG{__DIE__} = $warn_die_handler if (tied (*STDIN));
+
+    return $rc;
+}
+
+sub finish(;$) {
+    return Finish(@_) if @_ == 1;
+
+    %ENV = %FCGI::ENV if (defined %FCGI::ENV);
+
+    # not SFIO
+    if (tied (*STDIN)) {
+	for (qw(__WARN__ __DIE__)) {
+	    delete $SIG{$_} if ($SIG{$_} == $warn_die_handler);
+	}
+    }
+
+    Finish ($global_request);
+}
+
+sub flush(;$) {
+    return Flush(@_) if @_ == 1;
+
+    Flush($global_request);
+}
+
+# deprecated
+sub set_exit_status {
+}
+
+sub start_filter_data(;$) {
+    return StartFilterData(@_) if @_ == 1;
+
+    StartFilterData($global_request);
+}
+
+$global_request = Request();
+$warn_die_handler = sub { print STDERR @_ };
+
+package FCGI::Stream;
 
 sub PRINTF {
   shift->PRINT(sprintf(shift, @_));
