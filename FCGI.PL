@@ -1,13 +1,10 @@
 use Config;
 
 open OUT, ">FCGI.xs";
-$_=myconfig();
-m/(\d+).(\d+) patchlevel (\d+) subversion (\d+)/;
-$version="$1.$2"."0$3"."0$4";
 
-print "Generating FCGI.xs for Perl version $version\n";
+print "Generating FCGI.xs for Perl version $]\n";
 #unless (exists $Config{apiversion} && $Config{apiversion} >= 5.005) 
-unless ($version >= 5.005) {
+unless ($] >= 5.005) {
     for (qw(sv_undef diehook warnhook in_eval)) {
 	print OUT "#define PL_$_ $_\n" 
     }
