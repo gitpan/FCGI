@@ -1,4 +1,4 @@
-$Id: README,v 1.3 2000/04/09 19:00:12 skimo Exp $
+$Id: README,v 1.5 2000/07/10 09:56:49 skimo Exp $
 
     Copyright (c) 1996 Open Market, Inc.
     See the file "LICENSE.TERMS" for information on usage and redistribution
@@ -12,14 +12,13 @@ that comes with Open Market's FastCGI Developer's Kit, but does
 not require you to recompile perl.
 
 It even no longer requires perl to be compiled with sfio.
-The sfio version has had more testing though.
 To compile with sfio you'll need at least perl 5.003_02 and you'll have
 to have configured it with eg './Configure -Duseperlio -Dusesfio'.
 (See the INSTALL file that comes with the perl distribution.)
 To compile without sfio you'll need an even more recent perl version.
 (perl 5.004 and up should be fine.)
 
-See http://fastcgi.idle.com/ for more information about fastcgi.
+See http://www.fastcgi.com/ for more information about fastcgi.
 Lincoln D. Stein's perl CGI module also contains some information
 about fastcgi programming.
 
