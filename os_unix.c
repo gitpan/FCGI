@@ -111,77 +111,6 @@ static fd_set writeFdSetPost;
 static int numWrPosted = 0;
 static int volatile maxFd = -1;
 
-
-/*
- *----------------------------------------------------------------------
- *
- * AcquireLock --
- *
- *      On platforms that implement concurrent calls to accept
- *      on a shared listening socket, returns 0.  On other platforms,
- *      acquires an exclusive lock across all processes sharing a
- *      listening socket.  If "blocking" parameter is true, blocks
- *      until the lock has been acquired, otherwise does not.
- *
- * Results:
- *      0 for successful call, -1 in case of system error.
- *
- * Side effects:
- *      This process now has the exclusive lock.
- *
- *----------------------------------------------------------------------
- */
-static int AcquireLock(int blocking)
-{
-#ifdef USE_LOCKING
-    struct flock lock;
-    lock.l_type = F_WRLCK;
-    lock.l_start = 0;
-    lock.l_whence = SEEK_SET;
-    lock.l_len = 0;
-
-    while (fcntl(FCGI_LISTENSOCK_FILENO,
-                 blocking ? F_SETLKW : F_SETLK, &lock) < 0) {
-        if (errno != EINTR)
-            return -1;
-    }
-#endif /* USE_LOCKING */
-    return 0;
-}
-
-/*
- *----------------------------------------------------------------------
- *
- * ReleaseLock --
- *
- *      On platforms that implement concurrent calls to accept
- *      on a shared listening socket, does nothing.  On other platforms,
- *	releases an exclusive lock acquired by AcquireLock.
- *
- * Results:
- *      0 for successful call, -1 in case of system error (fatal).
- *
- * Side effects:
- *      This process no longer holds the lock.
- *
- *----------------------------------------------------------------------
- */
-static int ReleaseLock(void)
-{
-#ifdef USE_LOCKING
-    struct flock lock;
-    lock.l_type = F_UNLCK;
-    lock.l_start = 0;
-    lock.l_whence = SEEK_SET;
-    lock.l_len = 0;
-
-    if(fcntl(FCGI_LISTENSOCK_FILENO, F_SETLK, &lock) < 0) {
-        return -1;
-    }
-#endif /* USE_LOCKING */
-    return 0;
-}
-
 /*
  * fcgiSocket will hold the socket file descriptor if the call to
  * accept below results in a connection being accepted.  This socket
@@ -963,6 +892,76 @@ static int ClientAddrOK(struct sockaddr_in *saPtr, char *clientList)
 /*
  *----------------------------------------------------------------------
  *
+ * AcquireLock --
+ *
+ *      On platforms that implement concurrent calls to accept
+ *      on a shared listening ipcFd, returns 0.  On other platforms,
+ *	acquires an exclusive lock across all processes sharing a
+ *      listening ipcFd, blocking until the lock has been acquired.
+ *
+ * Results:
+ *      0 for successful call, -1 in case of system error (fatal).
+ *
+ * Side effects:
+ *      This process now has the exclusive lock.
+ *
+ *----------------------------------------------------------------------
+ */
+static int AcquireLock(int blocking)
+{
+#ifdef USE_LOCKING
+    struct flock lock;
+    lock.l_type = F_WRLCK;
+    lock.l_start = 0;
+    lock.l_whence = SEEK_SET;
+    lock.l_len = 0;
+
+    if(fcntl(FCGI_LISTENSOCK_FILENO, 
+             blocking ? F_SETLKW : F_SETLK, &lock) < 0) {
+        if (errno != EINTR)
+            return -1;
+    }
+#endif /* USE_LOCKING */
+    return 0;
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * ReleaseLock --
+ *
+ *      On platforms that implement concurrent calls to accept
+ *      on a shared listening ipcFd, does nothing.  On other platforms,
+ *	releases an exclusive lock acquired by AcquireLock.
+ *
+ * Results:
+ *      0 for successful call, -1 in case of system error (fatal).
+ *
+ * Side effects:
+ *      This process no longer holds the lock.
+ *
+ *----------------------------------------------------------------------
+ */
+static int ReleaseLock(void)
+{
+#ifdef USE_LOCKING
+    struct flock lock;
+    lock.l_type = F_UNLCK;
+    lock.l_start = 0;
+    lock.l_whence = SEEK_SET;
+    lock.l_len = 0;
+
+    if(fcntl(FCGI_LISTENSOCK_FILENO, F_SETLK, &lock) < 0) {
+        return -1;
+    }
+#endif /* USE_LOCKING */
+    return 0;
+}
+
+
+/*
+ *----------------------------------------------------------------------
+ *
  * OS_FcgiIpcAccept --
  *
  *	Accepts a new FastCGI connection.  This routine knows whether
@@ -986,9 +985,6 @@ int OS_FcgiIpcAccept(char *clientAddrList)
     int clilen = sizeof(sa);
     
     for(;;) {
-        if(AcquireLock(TRUE) < 0) {
-	    return -1;
-	}
 	/*
 	 * If there was a connection accepted from a prior FCGX_IsCGI
 	 * test, use it.
@@ -1003,6 +999,9 @@ int OS_FcgiIpcAccept(char *clientAddrList)
 	     */
 	    fcgiSocket = -1;
 	} else {
+            if(AcquireLock(TRUE) < 0) {
+                return -1;
+            }
             do {
                 socket = accept(FCGI_LISTENSOCK_FILENO,
                                 (struct sockaddr *) &sa.un,
@@ -1070,53 +1069,49 @@ int OS_IsFcgi()
 {
     int flags, flags1 ;
   
-    /*
-     * Lock the file descriptor.
-     */
-    if(AcquireLock(FALSE) == -1) {
-        /*
-         * If errno == EWOULDBLOCK then this is a valid FastCGI listener 
-         * socket that is already locked because there's an accept() pending.
-         * NOTE: HP-UX can return EAGAIN; Irix can return EACCES.
-         */
-        if(errno == EWOULDBLOCK
-#if (EAGAIN != EWOULDBLOCK)
-           || errno == EAGAIN
-#endif
-           || errno == EACCES)
-        {
-            isFastCGI = TRUE;
-            return isFastCGI;
-        }
-
-        /*
-         * XXX: The reason for the assert is that this call is not
-         *      supposed to return errors other than EWOULDBLOCK unless
-         *      the FCGI_LISTENSOCK_FILENO is closed.  If it is closed
-         *      then we have an unexpected error which should cause the
-         *      assert to pop.  The same is true for the following
-         *      asserts in this function.
-         */
-        assert(errno == 0);
-    }
-
+    fcgiClilen = sizeof(fcgiSa);
+    
     /*
      * Put the file descriptor into non-blocking mode.
      */
     flags = fcntl(FCGI_LISTENSOCK_FILENO, F_GETFL, 0);
     flags |= O_NONBLOCK;
     if( (fcntl(FCGI_LISTENSOCK_FILENO, F_SETFL, flags)) == -1 ) {
+        /*
+         * XXX: The reason for the assert is that this call is not
+         *      supposed to return an error unless the 
+         *      FCGI_LISTENSOCK_FILENO is closed.  If it is closed
+         *      then we have an unexpected error which should cause 
+         *      the assert to pop.  The same is true for the following
+         *      asserts in this function.
+         */
         assert(errno == 0);
     }
+
+    /* 
+     * Lock the descriptor.. if the lock fails with EWOULDBLOCK,
+     * then there is already connection available that locked this,
+     * so we are dealing with FastCGI processes.
+     */
+    if (AcquireLock(FALSE) == -1) {
+        if(errno == EACCES || errno == EWOULDBLOCK
+#if (EAGAIN != EWOULDBLOCK)
+           || errno == EAGAIN
+#endif
+          ) {
+            isFastCGI = TRUE;
+        } else {
+            isFastCGI = FALSE;
+        }
+    } else {
 
     /*
      * Perform an accept() on the file descriptor.  If this is not a
      * listener socket we will get an error.  Typically this will be
      * ENOTSOCK but it differs from platform to platform.
      */
-    fcgiClilen = sizeof(fcgiSa);
-    fcgiSocket = accept(FCGI_LISTENSOCK_FILENO,
-                        (struct sockaddr *) &fcgiSa.un, &fcgiClilen);
+    fcgiSocket = accept(FCGI_LISTENSOCK_FILENO, (struct sockaddr *) &fcgiSa.un,
+                        &fcgiClilen);
     if(fcgiSocket >= 0) {
         /*
          * This is a FastCGI listener socket because we accepted a
@@ -1136,20 +1131,21 @@ int OS_IsFcgi()
         /*
          * If errno == EWOULDBLOCK then this is a valid FastCGI listener 
          * socket without any connection pending at this time.
-         * NOTE: HP-UX can return EAGAIN; Irix can return EACCES.
+	 *
+	 * NOTE: hp-ux can also return EAGAIN for listener sockets in
+	 * non-blocking mode when no connections are present.
          */
-        if(errno == EWOULDBLOCK
 #if (EAGAIN != EWOULDBLOCK)
-           || errno == EAGAIN
+        if((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
+#else
+        if(errno == EWOULDBLOCK) {
 #endif
-           || errno == EACCES)
-        {
 	    isFastCGI = TRUE;
         } else {
 	    isFastCGI = FALSE;
         }
     }
-
+    }
     /*
      * Put the file descriptor back in blocking mode.
      */
@@ -1157,12 +1153,6 @@ int OS_IsFcgi()
     if( (fcntl(FCGI_LISTENSOCK_FILENO, F_SETFL, flags)) == -1 ) {
         assert(errno == 0);
     }
-
-    /*
-     * Unlock the file descriptor.
-     */
-    (void)ReleaseLock();
-
     return isFastCGI;
 }
 

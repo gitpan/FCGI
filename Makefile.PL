@@ -2,16 +2,6 @@ use ExtUtils::MakeMaker;
 use IO::File;
 use Config;
 
-if ($Config{'usesfio'} ne 'true' or $Config{'useperlio'} ne 'define') {
-    print "Your perl isn't compiled with perlio/sfio support.\n";
-    if ($Config{'d_gnulibc'} eq 'define') {
-	print "Still, you have glibc, so this might work.\n";
-    }
-    else {
-	exit 1;
-    }
-}
-
 @h = qw(fastcgi.h fcgiapp.h fcgiappmisc.h fcgimisc.h fcgi_config.h);
 @o = qw(FCGI.o);
 @prefix = qw(/usr /usr/local);
@@ -34,7 +24,7 @@ $inc = $prefix ? "-I$prefix/include" : '-I.';
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.31',
+    'VERSION'	=> '0.34',
     'LIBS'	=> [ @libs ],
     'OBJECT'	=> "@o",
     'INC'	=> $inc,

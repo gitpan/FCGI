@@ -1,3 +1,19 @@
+Version 0.34 -- 17 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+	
+	o No longer force sfio less compile
+	o Update os_unix.c from fcgi2.0b2.1
+	o Small documentation changes
+
+Version 0.33 -- 16 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o More support for tied handles
+
+Version 0.32 -- 16 June 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o Preliminary support for tied handles (doesn't require sfio)
+	o Force sfio less compile
+	o Changed protoype of set_exit_status
+
 Version 0.31 -- 13 July 1997  <skimo@breughel.ufsia.ac.be> Sven Verdoolaege
 
 	o Applied solaris accept patch from

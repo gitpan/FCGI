@@ -4,7 +4,7 @@
 
 #include "fcgiapp.h"
 
-#ifndef USE_SFIO
+#if 0
 #include <fcntl.h>
 #endif
 
@@ -26,21 +26,21 @@ typedef struct
     FCGX_Stream	*stream;
 } FCGI_Disc;
 
-static int
+static ssize_t
 sffcgiread(f, buf, n, disc)
 Sfio_t*		f;      /* stream involved */
 Void_t*		buf;    /* buffer to read into */
-int		n;      /* number of bytes to read */
+size_t		n;      /* number of bytes to read */
 Sfdisc_t*	disc;   /* discipline */
 {
     return FCGX_GetStr(buf, n, ((FCGI_Disc *)disc)->stream);
 }
 
-static int
+static ssize_t
 sffcgiwrite(f, buf, n, disc)
 Sfio_t*		f;      /* stream involved */
-Void_t*		buf;    /* buffer to read into */
-int		n;      /* number of bytes to read */
+const Void_t*	buf;    /* buffer to read into */
+size_t		n;      /* number of bytes to read */
 Sfdisc_t*	disc;   /* discipline */
 {
     n = FCGX_PutStr(buf, n, ((FCGI_Disc *)disc)->stream);
@@ -74,6 +74,7 @@ sfdcdelfcgi(disc)
     return 0;
 }
 #else
+#if 0
 
 static ssize_t
 fcgiread(cookie, buf, n)
@@ -100,11 +101,13 @@ cookie_io_functions_t fcgi_functions = {fcgiread, fcgiwrite,
     (_IO_fpos_t (*) __P((struct _IO_FILE *, _IO_off_t, int))) NULL, 
     (int (*) __P ((struct _IO_FILE *))) NULL};
 #endif
+#endif
 
 static int acceptCalled = FALSE;
 static int finishCalled = FALSE;
 static int isCGI = FALSE;
 static FCGX_Stream *in = NULL;
+static SV *svout = NULL, *svin, *sverr;
 
 static int 
 FCGI_Accept(void)
@@ -129,15 +132,19 @@ FCGI_Accept(void)
             sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
             sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
 #else
+	    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(svout)));
+	    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
+#if 0
 	    fflush(stdout);
 	    fflush(stderr);
+#endif
 #endif
 	}
     }
     if(!isCGI) {
-        FCGX_Stream *out, *error;
         FCGX_ParamArray envp;
-#ifndef USE_SFIO
+	FCGX_Stream *out, *error;
+#if 0
 	int sin, sout;
 	static int protect = TRUE;
 #endif
@@ -150,6 +157,18 @@ FCGI_Accept(void)
         sfdisc(PerlIO_stdout(), sfdcnewfcgi(out));
         sfdisc(PerlIO_stderr(), sfdcnewfcgi(error));
 #else
+	if (!svout) {
+	    sv_magic((SV *)gv_fetchpv("STDOUT",TRUE, SVt_PVIO), 
+			svout = newSV(0), 'q', Nullch, 0);
+	    sv_magic((SV *)gv_fetchpv("STDERR",TRUE, SVt_PVIO), 
+			sverr = newSV(0), 'q', Nullch, 0);
+	    sv_magic((SV *)gv_fetchpv("STDIN",TRUE, SVt_PVIO), 
+			svin = newSV(0), 'q', Nullch, 0);
+	}
+	sv_setref_iv(svout, "FCGI", (IV) out);
+	sv_setref_iv(sverr, "FCGI", (IV) error);
+	sv_setref_iv(svin, "FCGI", (IV) in);
+#if 0
 	/* avoid closing the FCGI_LISTENSOCK_FILENO */
 	if (protect) {
 	    sin = fcntl(0, F_DUPFD, 3); sout = fcntl(1, F_DUPFD, 3);
@@ -162,6 +181,7 @@ FCGI_Accept(void)
 	    close(sin); close(sout);
 	    protect = FALSE;
 	}
+#endif
 #endif
 	finishCalled = FALSE;
         environ = envp;
@@ -180,8 +200,12 @@ FCGI_Finish(void)
     sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
     sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
 #else
+    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(svout)));
+    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
+#if 0
     fflush(stdout);
     fflush(stderr);
+#endif
 #endif
     in = NULL;
     FCGX_Finish();
@@ -235,8 +259,47 @@ int set;
 }
 
 
+typedef FCGX_Stream *	FCGI;
+
 MODULE = FCGI		PACKAGE = FCGI
 
+#ifndef USE_SFIO
+void
+PRINT(stream, ...)
+	FCGI	stream;
+
+	PREINIT:
+	int	n;
+
+	CODE:
+	for (n = 1; n < items; ++n)
+	    FCGX_PutS((char *)SvPV(ST(n),na), stream);
+
+int
+READ(stream, bufsv, len, offset)
+	FCGI	stream;
+	SV *	bufsv;
+	int	len;
+	int	offset;
+
+	PREINIT:
+	char *	buf;
+
+	CODE:
+	if (! SvOK(bufsv))
+	    sv_setpvn(bufsv, "", 0);
+	buf = SvGROW(bufsv, len+offset+1);
+	len = FCGX_GetStr(buf+offset, len, stream);
+	SvCUR_set(bufsv, len+offset);
+	*SvEND(bufsv) = '\0';
+	(void)SvPOK_only(bufsv);
+	SvSETMAGIC(bufsv);
+	RETVAL = len;
+
+	OUTPUT:
+	RETVAL
+
+#endif
 
 int
 accept()
@@ -299,7 +362,7 @@ set_exit_status(status)
 
     int status;
 
-    PROTOTYPE:
+    PROTOTYPE: $
     CODE:
     FCGI_SetExitStatus(status);
 
