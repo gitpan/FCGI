@@ -24,7 +24,7 @@ $inc = $prefix ? "-I$prefix/include" : '-I.';
 # the contents of the Makefile that is written.
 WriteMakefile(
     'NAME'      => 'FCGI',
-    'VERSION'	=> '0.41',
+    'VERSION_FROM'	=> 'FCGI.pm',
     'LIBS'	=> [ @libs ],
     'OBJECT'	=> "@o",
     'INC'	=> $inc,

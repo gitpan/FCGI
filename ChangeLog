@@ -1,3 +1,11 @@
+Version 0.42 -- 28 August 1998  <skimo@kotnet.org> Sven Verdoolaege
+
+	o environ fixes ?
+	o print NULLs (Ken Alexander <kalex@eecs.umich.edu>)
+	o PRINTF support
+	o set version in FCGI.pm
+	o library fixes from "Saccoccio, Robert" <roberts@aiinet.com>
+
 Version 0.41 -- 29 July 1998  <skimo@kotnet.org> Sven Verdoolaege
 
 	o Compiles with perl 5.005

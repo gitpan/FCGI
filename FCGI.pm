@@ -10,17 +10,33 @@ require DynaLoader;
 @EXPORT = qw(
 	
 );
+
+$VERSION = '0.42';
+
 bootstrap FCGI;
 
 # Preloaded methods go here.
 
 # Autoload methods go after __END__, and are processed by the autosplit program.
 
+sub PRINTF {
+  shift->PRINT(sprintf(shift, @_));
+}
+
 1;
 
 =head1 NAME
 
 FCGI - Fast CGI module
+
+=head1 SYNOPSIS
+
+    use FCGI;
+
+    $count = 0;
+    while(FCGI::accept() >= 0) {
+	print("Content-type: text/html\r\n\r\n", ++$count);
+    }
 
 =head1 DESCRIPTION
 

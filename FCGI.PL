@@ -1,8 +1,11 @@
 use Config;
 
 open OUT, ">FCGI.xs";
-print OUT "#define PL_warnhook warnhook\n" 
-    unless (exists $Config{apiversion} && $Config{apiversion} >= 5.005);
+unless (exists $Config{apiversion} && $Config{apiversion} >= 5.005) {
+    for (qw(warnhook in_eval)) {
+	print OUT "#define PL_$_ $_\n" 
+    }
+}
 print OUT while <DATA>;
 close OUT;
 __END__
@@ -154,7 +157,7 @@ FCGI_Accept(void)
 	if (PL_warnhook) SvREFCNT_dec(PL_warnhook);
 	PL_warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
 	if (diehook) SvREFCNT_dec(diehook);
-	diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
+	diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::DIE")));
 #endif
 	finishCalled = FALSE;
         environ = envp;
@@ -178,8 +181,11 @@ FCGI_Finish(void)
 #endif
     in = NULL;
     FCGX_Finish();
+    /*
     environ = NULL;
+    */
     finishCalled = TRUE;
+#ifndef USE_SFIO
     if (PL_warnhook) {
 	SvREFCNT_dec(PL_warnhook);
 	PL_warnhook = Nullsv;
@@ -188,6 +194,7 @@ FCGI_Finish(void)
 	SvREFCNT_dec(diehook);
 	diehook = Nullsv;
     }
+#endif
 }
 
 static int 
@@ -216,22 +223,24 @@ int set;
     HV   *hv;
     SV   *sv;
     hv = perl_get_hv("ENV", TRUE);
-    for(i = 0; ; i++) {
-        if((p = envp[i]) == NULL) {
-            break;
-        }
-        p1 = strchr(p, '=');
-        assert(p1 != NULL);
-        *p1 = '\0';
-        if(set) {
-            sv = newSVpv(p1 + 1, 0);
+
+    if (!set)
+	perl_eval_pv("%ENV = %FCGI::ENV", 0);
+    else {
+	perl_eval_pv("%FCGI::ENV = %ENV", 0);
+	for(i = 0; ; i++) {
+	    if((p = envp[i]) == NULL) {
+		break;
+	    }
+	    p1 = strchr(p, '=');
+	    assert(p1 != NULL);
+	    *p1 = '\0';
+	    sv = newSVpv(p1 + 1, 0);
 	    /* call magic for this value ourselves */
-            hv_store(hv, p, p1 - p, sv, 0);
+	    hv_store(hv, p, p1 - p, sv, 0);
 	    SvSETMAGIC(sv);
-        } else {
-            hv_delete(hv, p, p1 - p, G_DISCARD);
-        }
-        *p1 = '=';
+	    *p1 = '=';
+	}
     }
 }
 
@@ -241,6 +250,14 @@ typedef FCGX_Stream *	FCGI;
 MODULE = FCGI		PACKAGE = FCGI
 
 #ifndef USE_SFIO
+void
+DIE(msg)
+	char *	msg;
+
+	CODE:
+	if (!PL_in_eval)
+	    FCGX_PutS(msg, (FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
+
 void
 WARN(msg)
 	char *	msg;
@@ -256,8 +273,11 @@ PRINT(stream, ...)
 	int	n;
 
 	CODE:
-	for (n = 1; n < items; ++n)
-	    FCGX_PutS((char *)SvPV(ST(n),na), stream);
+	for (n = 1; n < items; ++n) {
+            STRLEN len;
+            register char *tmps = (char *)SvPV(ST(n),len);
+            FCGX_PutStr(tmps, len, stream);
+	}
 	if (SvTRUEx(perl_get_sv("|", FALSE))) 
 	    FCGX_FFlush(stream);
 

@@ -2059,7 +2059,7 @@ int FCGX_Accept(
 	    reqDataPtr->ipcFd = OS_FcgiIpcAccept(webServerAddressList);
 	    if(reqDataPtr->ipcFd < 0) {
                 reqDataPtr = NULL;
-		return -1;
+		    return (errno > 0) ? (0 - errno) : -9999;
 	    }
 	}
         /*
