@@ -1,3 +1,8 @@
+Version 0.25 -- 13 October 1996 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
+
+	o Eliminate some warnings
+	o Check whether perl is compiled with sfio support
+
 Version 0.25 -- 25 September 1996 <skimo@dns.ufsia.ac.be> Sven Verdoolaege
 
 	o First public release

@@ -23,22 +23,22 @@ typedef struct
 
 static int
 sffcgiread(f, buf, n, disc)
-Sfio_t* f;      /* stream involved */
-char*           buf;    /* buffer to read into */
-int             n;      /* number of bytes to read */
-Sfdisc_t*       disc;   /* discipline */
+Sfio_t*		f;      /* stream involved */
+Void_t*		buf;    /* buffer to read into */
+int		n;      /* number of bytes to read */
+Sfdisc_t*	disc;   /* discipline */
 {
-    FCGX_GetStr(buf, n, ((FCGI_Disc *)disc)->stream);
+    return FCGX_GetStr(buf, n, ((FCGI_Disc *)disc)->stream);
 }
 
 static int
 sffcgiwrite(f, buf, n, disc)
-Sfio_t* f;      /* stream involved */
-char*           buf;    /* buffer to read into */
-int             n;      /* number of bytes to read */
-Sfdisc_t*       disc;   /* discipline */
+Sfio_t*		f;      /* stream involved */
+Void_t*		buf;    /* buffer to read into */
+int		n;      /* number of bytes to read */
+Sfdisc_t*	disc;   /* discipline */
 {
-    FCGX_PutStr(buf, n, ((FCGI_Disc *)disc)->stream);
+    return FCGX_PutStr(buf, n, ((FCGI_Disc *)disc)->stream);
 }
 
 Sfdisc_t *
@@ -74,8 +74,6 @@ static FCGX_Stream *in = NULL;
 static int 
 FCGI_Accept(void)
 {
-    /*PerlIO_flush(PerlIO_stdout());
-    PerlIO_flush(PerlIO_stderr());*/
     if(!acceptCalled) {
         /*
          * First call to FCGI_Accept.  Is application running
@@ -112,7 +110,7 @@ FCGI_Accept(void)
     return 0;
 }
 
-static int 
+static void 
 FCGI_Finish(void)
 {
     if(!acceptCalled || isCGI) {
@@ -133,7 +131,7 @@ FCGI_StartFilterData(void)
     return in ? FCGX_StartFilterData(in) : -1;
 }
 
-static
+static void
 FCGI_SetExitStatus(int status)
 {
     if (in) FCGX_SetExitStatus(status, in);

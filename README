@@ -12,15 +12,8 @@ It does require that perl is compiled with sfio though.
 Therefore you'll need at least perl 5.003_02 and you'll have
 to have configured it with eg './Configure -Duseperlio -Dusesfio' .
 
-If you don't know whether your perl has been compiled with sfio,
-you can test it with
-
-perl -V:usesfio
-
-The module currently does not check whether this is the case
-and will not compile or in any case not work if it isn't.
-
 No documentation yet.
+Let's hear someone asking for it first !
 See http://www.fastcgi.com/ for more information about fastcgi.
 Lincoln D. Stein's perl CGI module also contains some information
 about fastcgi programming.
