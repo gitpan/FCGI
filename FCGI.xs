@@ -4,10 +4,6 @@
 
 #include "fcgiapp.h"
 
-#if 0
-#include <fcntl.h>
-#endif
-
 #ifndef FALSE
 #define FALSE (0)
 #endif
@@ -73,34 +69,6 @@ sfdcdelfcgi(disc)
     Safefree(disc);
     return 0;
 }
-#else
-#if 0
-
-static ssize_t
-fcgiread(cookie, buf, n)
-void *	cookie;
-void *	buf;
-size_t	n;
-{
-    return FCGX_GetStr(buf, n, (FCGX_Stream *)cookie);
-}
-
-static ssize_t
-fcgiwrite(cookie, buf, n)
-void *		cookie;
-const void *	buf;
-size_t		n;
-{
-    n = FCGX_PutStr(buf, n, (FCGX_Stream *)cookie);
-    if (SvTRUEx(perl_get_sv("|", FALSE))) 
-	FCGX_FFlush((FCGX_Stream *)cookie);
-    return n;
-}
-
-cookie_io_functions_t fcgi_functions = {fcgiread, fcgiwrite, 
-    (_IO_fpos_t (*) __P((struct _IO_FILE *, _IO_off_t, int))) NULL, 
-    (int (*) __P ((struct _IO_FILE *))) NULL};
-#endif
 #endif
 
 static int acceptCalled = FALSE;
@@ -108,6 +76,18 @@ static int finishCalled = FALSE;
 static int isCGI = FALSE;
 static FCGX_Stream *in = NULL;
 static SV *svout = NULL, *svin, *sverr;
+
+static int 
+FCGI_Flush(void)
+{
+#ifdef USE_SFIO
+    sfsync(PerlIO_stdout());
+    sfsync(PerlIO_stderr());
+#else
+    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(svout)));
+    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
+#endif
+}
 
 static int 
 FCGI_Accept(void)
@@ -132,22 +112,13 @@ FCGI_Accept(void)
             sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
             sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
 #else
-	    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(svout)));
-	    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
-#if 0
-	    fflush(stdout);
-	    fflush(stderr);
-#endif
+	    FCGI_Flush();
 #endif
 	}
     }
     if(!isCGI) {
         FCGX_ParamArray envp;
 	FCGX_Stream *out, *error;
-#if 0
-	int sin, sout;
-	static int protect = TRUE;
-#endif
         int acceptResult = FCGX_Accept(&in, &out, &error, &envp);
         if(acceptResult < 0) {
             return acceptResult;
@@ -158,30 +129,19 @@ FCGI_Accept(void)
         sfdisc(PerlIO_stderr(), sfdcnewfcgi(error));
 #else
 	if (!svout) {
+	    newSVrv(svout = newSV(0), "FCGI");
 	    sv_magic((SV *)gv_fetchpv("STDOUT",TRUE, SVt_PVIO), 
-			svout = newSV(0), 'q', Nullch, 0);
+			svout, 'q', Nullch, 0);
+	    newSVrv(sverr = newSV(0), "FCGI");
 	    sv_magic((SV *)gv_fetchpv("STDERR",TRUE, SVt_PVIO), 
-			sverr = newSV(0), 'q', Nullch, 0);
+			sverr, 'q', Nullch, 0);
+	    newSVrv(svin = newSV(0), "FCGI");
 	    sv_magic((SV *)gv_fetchpv("STDIN",TRUE, SVt_PVIO), 
-			svin = newSV(0), 'q', Nullch, 0);
+			svin, 'q', Nullch, 0);
 	}
-	sv_setref_iv(svout, "FCGI", (IV) out);
-	sv_setref_iv(sverr, "FCGI", (IV) error);
-	sv_setref_iv(svin, "FCGI", (IV) in);
-#if 0
-	/* avoid closing the FCGI_LISTENSOCK_FILENO */
-	if (protect) {
-	    sin = fcntl(0, F_DUPFD, 3); sout = fcntl(1, F_DUPFD, 3);
-	}
-	freopencookie((void *)in, "r", fcgi_functions, stdin);
-	freopencookie((void *)out, "w", fcgi_functions, stdout);
-	freopencookie((void *)error, "w", fcgi_functions, stderr);
-	if (protect) {
-	    dup2(sin, 0); dup2(sout, 1);
-	    close(sin); close(sout);
-	    protect = FALSE;
-	}
-#endif
+	sv_setiv(SvRV(svout), (IV) out);
+	sv_setiv(SvRV(sverr), (IV) error);
+	sv_setiv(SvRV(svin), (IV) in);
 #endif
 	finishCalled = FALSE;
         environ = envp;
@@ -200,12 +160,7 @@ FCGI_Finish(void)
     sfdcdelfcgi(sfdisc(PerlIO_stdout(), SF_POPDISC));
     sfdcdelfcgi(sfdisc(PerlIO_stderr(), SF_POPDISC));
 #else
-    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(svout)));
-    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(sverr)));
-#if 0
-    fflush(stdout);
-    fflush(stderr);
-#endif
+    FCGI_Flush();
 #endif
     in = NULL;
     FCGX_Finish();
@@ -278,6 +233,32 @@ PRINT(stream, ...)
 	    FCGX_FFlush(stream);
 
 int
+WRITE(stream, bufsv, len, ...)
+	FCGI	stream;
+	SV *	bufsv;
+	int	len;
+
+	PREINIT:
+	int	offset;
+	char *	buf;
+	STRLEN	blen;
+	int	n;
+
+	CODE:
+	offset = (items == 4) ? (int)SvIV(ST(3)) : 0;
+	buf = SvPV(bufsv, blen);
+	if (offset < 0) offset += blen;
+	if (len > blen - offset)
+	    len = blen - offset;
+	if (offset < 0 || offset >= blen ||
+		(n = FCGX_PutStr(buf+offset, len, stream)) < 0) 
+	    ST(0) = &sv_undef;
+	else {
+	    ST(0) = sv_newmortal();
+	    sv_setpvn(ST(0), (char *)&n, 1);
+	}
+
+int
 READ(stream, bufsv, len, offset)
 	FCGI	stream;
 	SV *	bufsv;
@@ -313,6 +294,19 @@ GETC(stream)
 	    ST(0) = sv_newmortal();
 	    sv_setpvn(ST(0), (char *)&retval, 1);
 	} else ST(0) = &sv_undef;
+
+bool
+CLOSE(stream)
+	FCGI	stream;
+
+	ALIAS:
+	DESTROY = 1
+
+	CODE:
+	RETVAL = FCGX_FClose(stream) != -1;
+
+	OUTPUT:
+	RETVAL
 
 #endif
 
@@ -371,6 +365,13 @@ finish()
         FCGI_Finish();
     }
 
+
+void
+flush()
+
+    PROTOTYPE:
+    CODE:
+    FCGI_Flush();
 
 void
 set_exit_status(status)

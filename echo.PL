@@ -22,7 +22,6 @@ __END__
 #
 
 use FCGI;
-$| = 1;
 
 sub print_env {
     my($label, $envp) = @_;
@@ -61,6 +60,7 @@ while(FCGI::accept() >= 0) {
     }
     print_env("Request environment", \%ENV);
     print "More on its way ... wait a few seconds\n<BR>\n<BR>";
+    FCGI::flush();
     sleep(3);
     print_env("Initial environment", \%initialEnv);
 }
