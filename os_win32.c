@@ -21,7 +21,7 @@
 #endif
 
 #ifndef lint
-static const char rcsid[] = "$Id: os_win32.c,v 1.1.2.3 1997/03/21 16:39:57 tumblin Exp $";
+static const char rcsid[] = "$Id: os_win32.c,v 1.1.1.1 1997/09/16 15:36:33 stanleyg Exp $";
 #endif /* not lint */
 
 #include <windows.h>

@@ -18,6 +18,8 @@
 #ifndef _FCGIOS_H
 #define _FCGIOS_H
 
+#include <sys/time.h>
+
 #ifdef _WIN32
 #define OS_Errno GetLastError()
 #define OS_SetErrno(err) SetLastError(err)
@@ -33,6 +35,17 @@
 #ifdef _WIN32
 #include <io.h>
 #endif
+
+/* This is the initializer for a "struct timeval" used in a select() call
+ * right after a new request is accept()ed to determine readablity.  Its
+ * a drop-dead timer.  Its only used for AF_UNIX sockets (not TCP sockets).
+ * Its a workaround for a kernel bug in Linux 2.0.x and SCO Unixware.
+ * Making this as small as possible, yet remain reliable would be best.
+ * 2 seconds is very conservative.  0,0 is not reliable.  The shorter the 
+ * timeout, the faster request processing will recover.  The longer the
+ * timeout, the more likely this application being "busy" will cause other
+ * requests to abort and cause more dead sockets that need this timeout. */
+#define READABLE_UNIX_FD_DROP_DEAD_TIMEVAL 2,0
 
 #ifndef STDIN_FILENO
 #define STDIN_FILENO  0

@@ -1,8 +1,15 @@
+Version 0.45 -- 8 March 1999  <skimo@kotnet.org> Sven Verdoolaege
+
+	o FCGI.pm now part of the devel kit
+	o library fixes  ("Rob Saccoccio" <robs@ipass.net>)
+	o allow bypassing of installation of handlers
+	o ActivePerl compatibility (Murray Nesbitt <murray@ActiveState.com>)
+
 Version 0.43 -- 22 December 1998  <skimo@kotnet.org> Sven Verdoolaege
 
 	o POST on bigendians (Paul GABORIT <gaborit@enstimac.fr>)
 	o Some win32 changes (Monty <xiphmont@fastserv.com>)
-	o library fixes from "Saccoccio, Robert" <roberts@aiinet.com>
+	o library fixes  ("Rob Saccoccio" <robs@ipass.net>)
 
 Version 0.42 -- 28 August 1998  <skimo@kotnet.org> Sven Verdoolaege
 
@@ -10,7 +17,7 @@ Version 0.42 -- 28 August 1998  <skimo@kotnet.org> Sven Verdoolaege
 	o print NULLs (Ken Alexander <kalex@eecs.umich.edu>)
 	o PRINTF support
 	o set version in FCGI.pm
-	o library fixes from "Saccoccio, Robert" <roberts@aiinet.com>
+	o library fixes  ("Rob Saccoccio" <robs@ipass.net>)
 
 Version 0.41 -- 29 July 1998  <skimo@kotnet.org> Sven Verdoolaege
 

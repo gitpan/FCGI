@@ -12,6 +12,8 @@ unless ($] >= 5.005) {
 print OUT while <DATA>;
 close OUT;
 __END__
+/* $Id: FCGI.PL,v 1.3 1999/03/08 16:26:04 skimo Exp $ */
+
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
@@ -24,6 +26,10 @@ __END__
 
 #ifndef TRUE
 #define TRUE  (1)
+#endif
+
+#ifdef WIN32
+#define environ _environ
 #endif
 
 extern char **environ;
@@ -157,10 +163,16 @@ FCGI_Accept(void)
 	sv_setiv(SvRV(svout), (IV) out);
 	sv_setiv(SvRV(sverr), (IV) error);
 	sv_setiv(SvRV(svin), (IV) in);
-	if (PL_warnhook) SvREFCNT_dec(PL_warnhook);
-	PL_warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
-	if (PL_diehook) SvREFCNT_dec(PL_diehook);
-	PL_diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::DIE")));
+	if (!SvTRUEx(perl_get_sv("FCGI::no_warn_redirection", FALSE)))
+	{
+	    if (PL_warnhook) SvREFCNT_dec(PL_warnhook);
+	    PL_warnhook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN")));
+	}
+	if (!SvTRUEx(perl_get_sv("FCGI::no_die_redirection", FALSE)))
+	{
+	    if (PL_diehook) SvREFCNT_dec(PL_diehook);
+	    PL_diehook = SvREFCNT_inc(GvCV(gv_fetchmethod(Nullhv, "FCGI::DIE")));
+	}
 #endif
 	finishCalled = FALSE;
         environ = envp;
@@ -189,11 +201,13 @@ FCGI_Finish(void)
     */
     finishCalled = TRUE;
 #ifndef USE_SFIO
-    if (PL_warnhook) {
+    if (!SvTRUEx(perl_get_sv("FCGI::no_warn_redirection", FALSE)) &&
+	    PL_warnhook == (SV*)GvCV(gv_fetchmethod(Nullhv, "FCGI::WARN"))) {
 	SvREFCNT_dec(PL_warnhook);
 	PL_warnhook = Nullsv;
     }
-    if (PL_diehook) {
+    if (!SvTRUEx(perl_get_sv("FCGI::no_die_redirection", FALSE)) &&
+	    PL_diehook == (SV*)GvCV(gv_fetchmethod(Nullhv, "FCGI::DIE"))) {
 	SvREFCNT_dec(PL_diehook);
 	PL_diehook = Nullsv;
     }

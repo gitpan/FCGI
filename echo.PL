@@ -16,7 +16,7 @@ __END__
 # See the file "LICENSE.TERMS" for information on usage and redistribution
 # of this file, and for a DISCLAIMER OF ALL WARRANTIES.
 # 
-#  $Id: echo-perl,v 1.1.2.1 1996/06/11 19:45:56 mbrown Exp $
+#  $Id: echo.PL,v 1.1 1999/02/13 05:26:47 roberts Exp $
 #
 # Changed by skimo to demostrate autoflushing 1997/02/19
 #

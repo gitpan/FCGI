@@ -11,7 +11,7 @@
  * See the file "LICENSE.TERMS" for information on usage and redistribution
  * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
  *
- * $Id: fcgiappmisc.h,v 1.7.2.2 1997/03/21 01:44:19 snapper Exp $
+ * $Id: fcgiappmisc.h,v 1.1.1.1 1997/09/16 15:36:32 stanleyg Exp $
  */
 
 #ifndef _FCGIAPPMISC_H

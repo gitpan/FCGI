@@ -9,7 +9,7 @@
  * See the file "LICENSE.TERMS" for information on usage and redistribution
  * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
  *
- * $Id: fcgimisc.h,v 1.11.2.1 1997/01/18 15:51:53 snapper Exp $
+ * $Id: fcgimisc.h,v 1.1.1.1 1997/09/16 15:36:32 stanleyg Exp $
  */
 
 #ifndef _FCGIMISC_H
