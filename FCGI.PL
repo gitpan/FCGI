@@ -7,7 +7,7 @@ open OUT, ">FCGI.pm";
 
 print "Generating FCGI.pm\n";
 print OUT <<'EOP';
-# $Id: FCGI.PL,v 1.34 2001/10/04 08:04:16 skimo Exp $
+# $Id: FCGI.PL,v 1.37 2002/12/15 20:02:48 skimo Exp $
 
 package FCGI;
 
@@ -165,8 +165,9 @@ sub Finish {
     return unless $req->{accepted};
     if ($req->{bound}) {
 	$req->UndoBindings();
-	close ${$req->{out}};
-	close ${$req->{err}};
+	# apparently these are harmful
+	# close ${$req->{out}};
+	# close ${$req->{err}};
     }
     $req->{accepted} = 0;
 }
@@ -218,12 +219,19 @@ sub write {
 }
 
 sub write_record {
-    my ($self, $type, $content, $len) = @_;
-    my $padlen = (8 - ($len % 8)) % 8;
-    my $templ = "CCnnCxa${len}x$padlen";
-    my $data = pack($templ, 
-		    VERSION_1, $type, $self->{id}, $len, $padlen, $content);
-    syswrite $self->{socket}, $data;
+    my ($self, $type, $content, $length) = @_;
+    my $offset = 0;
+    while ($length > 0) {
+	my $len = $length > 32*1024 ? 32*1024 : $length;
+	my $padlen = (8 - ($len % 8)) % 8;
+	my $templ = "CCnnCxa${len}x$padlen";
+	my $data = pack($templ, 
+			VERSION_1, $type, $self->{id}, $len, $padlen, 
+			substr($content, $offset, $len));
+	syswrite $self->{socket}, $data;
+	$length -= $len;
+	$offset += $len;
+    }
 }
 
 { package FCGI::Stream;
@@ -381,6 +389,11 @@ sub OPEN {
 	return $rc;
     }
 }
+
+# Apparently some use fileno to determine if a filehandle is open,
+# so we might want to return a defined, but meaningless value.
+# An alternative would be to return the fcgi stream fd.
+# sub FILENO { -2 }
 
 1;
 
