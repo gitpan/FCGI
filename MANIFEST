@@ -8,6 +8,7 @@ configure
 configure.in
 configure.readme
 echo.PL
+remote.PL
 threaded.PL
 typemap
 LICENSE.TERMS

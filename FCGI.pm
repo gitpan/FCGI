@@ -1,4 +1,4 @@
-# $Id: FCGI.pm,v 1.12 2000/10/18 20:39:15 skimo Exp $
+# $Id: FCGI.pm,v 1.14 2000/11/01 15:12:27 skimo Exp $
 
 package FCGI;
 
@@ -13,7 +13,7 @@ require DynaLoader;
 	
 );
 
-$VERSION = '0.55';
+$VERSION = '0.56';
 
 bootstrap FCGI;
 
@@ -41,7 +41,8 @@ sub accept() {
     }
 
     # not SFIO
-    $SIG{__WARN__} = $SIG{__DIE__} = $warn_die_handler if (tied (*STDIN));
+    $SIG{__WARN__} = $warn_handler if (tied (*STDIN));
+    $SIG{__DIE__} = $die_handler if (tied (*STDIN));
 
     return $rc;
 }
@@ -51,9 +52,8 @@ sub finish() {
 
     # not SFIO
     if (tied (*STDIN)) {
-	for (qw(__WARN__ __DIE__)) {
-	    delete $SIG{$_} if ($SIG{$_} == $warn_die_handler);
-	}
+	delete $SIG{__WARN__} if ($SIG{__WARN__} == $warn_handler);
+	delete $SIG{__DIE__} if ($SIG{__DIE__} == $die_handler);
     }
 
     Finish ($global_request);
@@ -80,7 +80,8 @@ sub start_filter_data() {
 }
 
 $global_request = Request();
-$warn_die_handler = sub { print STDERR @_ unless $^S };
+$warn_handler = sub { print STDERR @_ };
+$die_handler = sub { print STDERR @_ unless $^S };
 
 package FCGI::Stream;
 
@@ -212,7 +213,11 @@ If a connection has been accepted before, the old
 one will be finished first.
 
 Note that unlike with the old interface, no die and warn
-handlers are installed by default.
+handlers are installed by default. This means that if
+you are not running an sfio enabled perl, any warn or
+die message will not end up in the server's log by default.
+It is advised you set up die and warn handlers yourself.
+FCGI.pm contains an example of die and warn handlers.
 
 =item $req->Finish()
 
@@ -230,6 +235,18 @@ Temporarily detaches filehandles on an accepted connection.
 =item $req->Attach()
 
 Re-attaches filehandles on an accepted connection.
+
+=item $env = $req->GetEnvironment()
+
+Returns the environment parameter passed to FCGI::Request.
+
+=item ($in, $out, $err) = $req->GetHandles()
+
+Returns the file handle parameters passed to FCGI::Request.
+
+=item $isfcgi = $req->IsFastCGI()
+
+Returns whether or not the program was run as a FastCGI.
 
 =back
 

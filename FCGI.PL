@@ -12,7 +12,7 @@ unless ($] >= 5.005) {
 print OUT while <DATA>;
 close OUT;
 __END__
-/* $Id: FCGI.PL,v 1.16 2000/10/18 20:39:15 skimo Exp $ */
+/* $Id: FCGI.PL,v 1.18 2000/11/01 15:12:26 skimo Exp $ */
 
 #include "EXTERN.h"
 #include "perl.h"
@@ -185,31 +185,38 @@ HV *hv;
     }
 }
 
-static int 
-FCGI_Accept(FCGP_Request* request)
+static int
+FCGI_IsFastCGI(FCGP_Request* request)
 {
     static int isCGI = -1; /* -1: not checked; 0: FCGI; 1: CGI */
 
-    int req_isCGI = 
-	request->requestPtr->listen_sock == FCGI_LISTENSOCK_FILENO ?
-	isCGI : 0;
+    if (request->requestPtr->listen_sock == FCGI_LISTENSOCK_FILENO) {
+	if (isCGI == -1)
+	    isCGI = FCGX_IsCGI();
+	return !isCGI;
+    }
 
+    /* A explicit socket is being used -> assume FastCGI */
+    return 1;
+}
+
+static int 
+FCGI_Accept(FCGP_Request* request)
+{
     dTHX;
 
-    if(req_isCGI == -1) {
-        /*
-         * First call to FCGI_Accept.  Is application running
-         * as FastCGI or as CGI?
-         */
-        req_isCGI = isCGI = FCGX_IsCGI();
-    } else if(req_isCGI) {
+    if (!FCGI_IsFastCGI(request)) {
+	static int been_here = 0;
+
         /*
          * Not first call to FCGI_Accept and running as CGI means
          * application is done.
          */
-        return(EOF);
-    } 
-    if(!req_isCGI) {
+	if (been_here)
+	    return EOF;
+
+	been_here = 1;
+    } else {
 #ifdef USE_SFIO
 	int i;
 #endif
@@ -343,7 +350,7 @@ typedef FCGP_Request *	FCGI;
 typedef	GV*		GLOBREF;
 typedef	HV*		HASHREF;
 
-MODULE = FCGI		PACKAGE = FCGI
+MODULE = FCGI		PACKAGE = FCGI	    PREFIX = FCGI_
 
 BOOT:
     FCGI_Init();
@@ -385,44 +392,55 @@ CloseSocket(socket)
     close(socket);
 
 int
-Accept(request)
+FCGI_Accept(request)
 
     FCGI    request;
 
     PROTOTYPE: $
 
-    CODE:
-    RETVAL = FCGI_Accept(request);
+void
+FCGI_Finish(request)
+    FCGI    request;
 
-    OUTPUT:
+    PROTOTYPE: $
+
+void
+FCGI_Flush(request)
+    FCGI    request;
+
+    PROTOTYPE: $
+
+HV *
+GetEnvironment(request)
+    FCGI    request;
+
+    PROTOTYPE: $
+
+    CODE:
+    RETVAL = request->hvEnv;
+
+    OUTPUT: 
     RETVAL
 
-
 void
-Finish(request)
-
+GetHandles(request)
     FCGI    request;
 
     PROTOTYPE: $
 
-    CODE:
-    {
-        /*
-         * Finish the request.
-         */
-        FCGI_Finish(request);
-    }
+    PREINIT:
+    int	    i;
 
+    PPCODE:
+    EXTEND(sp,3);
+    for (i = 0; i < 3; ++i)
+	PUSHs(sv_2mortal(newRV((SV *) request->gv[i])));
 
-void
-Flush(request)
-
+int
+FCGI_IsFastCGI(request)
     FCGI    request;
 
     PROTOTYPE: $
-
-    CODE:
-    FCGI_Flush(request);
 
 void
 Detach(request)
@@ -448,17 +466,11 @@ Attach(request)
 
 
 int
-StartFilterData(request)
+FCGI_StartFilterData(request)
 
     FCGI    request;
 
     PROTOTYPE: $
-
-    CODE:
-    RETVAL = FCGI_StartFilterData(request);
-
-    OUTPUT:
-    RETVAL
 
 void
 DESTROY(request)
