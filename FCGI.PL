@@ -190,11 +190,11 @@ FCGI_Accept(FCGP_Request* request)
 {
     static int isCGI = -1; /* -1: not checked; 0: FCGI; 1: FCGI */
 
-    dTHX;
-
     int req_isCGI = 
 	request->requestPtr->listen_sock == FCGI_LISTENSOCK_FILENO ?
 	isCGI : 0;
+
+    dTHX;
 
     if(req_isCGI == -1) {
         /*

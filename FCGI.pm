@@ -13,7 +13,7 @@ require DynaLoader;
 	
 );
 
-$VERSION = '0.51';
+$VERSION = '0.52';
 
 bootstrap FCGI;
 
