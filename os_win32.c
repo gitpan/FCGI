@@ -17,7 +17,7 @@
  *  significantly more enjoyable.)
  */
 #ifndef lint
-static const char rcsid[] = "$Id: os_win32.c,v 1.24 2001/09/14 19:43:27 robs Exp $";
+static const char rcsid[] = "$Id: os_win32.c,v 1.33 2002/03/05 18:15:15 robs Exp $";
 #endif /* not lint */
 
 #define WIN32_LEAN_AND_MEAN 
@@ -27,6 +27,7 @@ static const char rcsid[] = "$Id: os_win32.c,v 1.24 2001/09/14 19:43:27 robs Exp
 #include <assert.h>
 #include <stdio.h>
 #include <sys/timeb.h>
+#include <process.h>
 
 #define DLLAPI  __declspec(dllexport)
 
@@ -52,6 +53,7 @@ static HANDLE hStdinThread = INVALID_HANDLE_VALUE;
 static HANDLE stdioHandles[3] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE,
 				 INVALID_HANDLE_VALUE};
 
+// This is a nail for listening to more than one port..
 static HANDLE acceptMutex = INVALID_HANDLE_VALUE;
 
 static BOOLEAN shutdownPending = FALSE;
@@ -124,7 +126,6 @@ static FILE_TYPE listenType = FD_UNUSED;
 // XXX This should be a DESCRIPTOR
 static HANDLE hListen = INVALID_HANDLE_VALUE;
 
-static OVERLAPPED listenOverlapped;
 static BOOLEAN libInitialized = FALSE;
 
 /*
@@ -222,8 +223,8 @@ static int Win32NewDescriptor(FILE_TYPE type, int fd, int desiredFd)
  *
  *--------------------------------------------------------------
  */
-static void StdinThread(LPDWORD startup){
-
+static void StdinThread(void * startup) 
+{
     int doIo = TRUE;
     unsigned long fd;
     unsigned long bytesRead;
@@ -268,28 +269,27 @@ void OS_ShutdownPending(void)
     shutdownPending = TRUE;
 }
 
-/* XXX Need a shutdown now event */
-static DWORD WINAPI ShutdownRequestThread(LPVOID arg)
+static void ShutdownRequestThread(void * arg)
 {
     HANDLE shutdownEvent = (HANDLE) arg;
     
-    if (WaitForSingleObject(shutdownEvent, INFINITE) == WAIT_FAILED)
+    WaitForSingleObject(shutdownEvent, INFINITE);
+
+    shutdownPending = TRUE;
+
+    if (listenType == FD_PIPE_SYNC)
     {
-        // Assuming it will happen again, all we can do is exit the thread
-        return 1;
+        // Its a hassle to get ConnectNamedPipe to return early,
+        // so just wack the whole process - yes, this will toast
+        // any requests in progress, but at least its a clean 
+        // shutdown (its better than TerminateProcess())
+        exit(0);
     }
-    else
-    {
-        // "Simple reads and writes to properly-aligned 32-bit variables are atomic"
-        shutdownPending = TRUE;
-        
-        // Before an accept() is entered the shutdownPending flag is checked.
-        // If set, OS_Accept() will return -1.  If not, it waits
-        // on a connection request for one second, checks the flag, & repeats.
-        // Only one process/thread is allowed to do this at time by
-        // wrapping the accept() with mutex.
-        return 0;
-    }
+       
+    // FD_SOCKET_SYNC: When in Accept(), select() is used to poll
+    // the shutdownPending flag - yeah this isn't pretty either
+    // but its only one process doing it if an Accept mutex is used.
+    // This at least buys no toasted requests.
 }
 
 /*
@@ -313,7 +313,6 @@ int OS_LibInit(int stdioFds[3])
     WSADATA wsaData;
     int err;
     int fakeFd;
-    DWORD threadId;
     char *cLenPtr = NULL;
     char *val = NULL;
         
@@ -356,22 +355,21 @@ int OS_LibInit(int stdioFds[3])
     {
         HANDLE shutdownEvent = (HANDLE) atoi(val);
 
-        if (! CreateThread(NULL, 0, ShutdownRequestThread, 
-                           shutdownEvent, 0, NULL))
+        if (_beginthread(ShutdownRequestThread, 0, shutdownEvent) == -1)
         {
             return -1;
         }
     }
 
-    /*
-     * If an accept mutex is in the env, save it and remove it.
-     */
-    val = getenv(MUTEX_VARNAME);
-    if (val != NULL) 
+    if (acceptMutex == INVALID_HANDLE_VALUE)
     {
-        acceptMutex = (HANDLE) atoi(val);
+        /* If an accept mutex is in the env, use it */
+        val = getenv(MUTEX_VARNAME);
+        if (val != NULL) 
+        {
+            acceptMutex = (HANDLE) atoi(val);
+        }
     }
-
 
     /*
      * Determine if this library is being used to listen for FastCGI
@@ -419,7 +417,6 @@ int OS_LibInit(int stdioFds[3])
         if (SetNamedPipeHandleState(hListen, &pipeMode, NULL, NULL)) 
         {
             listenType = FD_PIPE_SYNC;
-            listenOverlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
         } 
         else 
         {
@@ -492,10 +489,8 @@ int OS_LibInit(int stdioFds[3])
      */
     if((cLenPtr = getenv("CONTENT_LENGTH")) != NULL &&
        atoi(cLenPtr) > 0) {
-        hStdinThread = CreateThread(NULL, 8192,
-				    (LPTHREAD_START_ROUTINE)&StdinThread,
-				    NULL, 0, &threadId);
-	if (hStdinThread == NULL) {
+        hStdinThread = (HANDLE) _beginthread(StdinThread, 0, NULL);
+	if (hStdinThread == (HANDLE) -1) {
 	    printf("<H2>OS_LibInit Failed to create STDIN thread!  ERROR: %d</H2>\r\n\r\n",
 		   GetLastError());
 	    return -1;
@@ -688,25 +683,13 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
 {
     int pseudoFd = -1;
     short port = getPort(bindPath);
-    HANDLE mutex = CreateMutex(NULL, FALSE, NULL);
-    char * mutexEnvString;
 
-    if (mutex == NULL)
+    if (acceptMutex == INVALID_HANDLE_VALUE)
     {
-        return -2;
+        acceptMutex = CreateMutex(NULL, FALSE, NULL);
+        if (acceptMutex == NULL) return -2;
+        if (! SetHandleInformation(acceptMutex, HANDLE_FLAG_INHERIT, TRUE)) return -3;
     }
-
-    if (! SetHandleInformation(mutex, HANDLE_FLAG_INHERIT, TRUE))
-    {
-        return -3;
-    }
-
-    // This is a nail for listening to more than one port..
-    // This should really be handled by the caller.
-
-    mutexEnvString = malloc(strlen(MUTEX_VARNAME) + 7);
-    sprintf(mutexEnvString, MUTEX_VARNAME "=%d", (int) mutex);
-    putenv(mutexEnvString);
 
     // There's nothing to be gained (at the moment) by a shutdown Event    
 
@@ -772,7 +755,7 @@ int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
         strcat(pipePath, bindPath);
 
         hListenPipe = CreateNamedPipe(pipePath,
-		        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+		        PIPE_ACCESS_DUPLEX,
 		        PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_READMODE_BYTE,
 		        PIPE_UNLIMITED_INSTANCES,
 		        4096, 4096, 0, NULL);
@@ -1384,24 +1367,47 @@ int OS_Close(int fd)
 	case FD_PIPE_ASYNC:
 	case FD_FILE_SYNC:
 	case FD_FILE_ASYNC:
-	    break;
+	    
+        break;
 
-        case FD_SOCKET_SYNC:
+    case FD_SOCKET_SYNC:
 	case FD_SOCKET_ASYNC:
-	    /*
-	     * Closing a socket that has an async read outstanding causes a
-	     * tcp reset and possible data loss.  The shutdown call seems to
-	     * prevent this.
-	     */
-	    shutdown(fdTable[fd].fid.sock, 2);
-	    /*
-	     * closesocket returns: 0 success, SOCKET_ERROR failure
-	     */
-	    if (closesocket(fdTable[fd].fid.sock) == SOCKET_ERROR)
-		ret = -1;
-	    break;
+
+        /*
+         * shutdown() the send side and then read() from client until EOF
+         * or a timeout expires.  This is done to minimize the potential
+         * that a TCP RST will be sent by our TCP stack in response to 
+         * receipt of additional data from the client.  The RST would
+         * cause the client to discard potentially useful response data.
+         */
+
+        if (shutdown(fdTable[fd].fid.sock, SD_SEND) == 0)
+        {
+            struct timeval tv;
+            fd_set rfds;
+            int sock = fdTable[fd].fid.sock;
+            int rv;
+            char trash[1024];
+   
+            FD_ZERO(&rfds);
+
+            do 
+            {
+	            FD_SET(sock, &rfds);
+	            tv.tv_sec = 2;
+	            tv.tv_usec = 0;
+	            rv = select(sock + 1, &rfds, NULL, NULL, &tv);
+            }
+            while (rv > 0 && recv(sock, trash, sizeof(trash), 0) > 0);
+        }
+        
+        closesocket(fdTable[fd].fid.sock);
+
+        break;
+
 	default:
-	    return -1;		/* fake failure */
+
+	    ret = -1;		/* fake failure */
     }
 
     Win32FreeDescriptor(fd);
@@ -1551,7 +1557,7 @@ static int CALLBACK isAddrOKCallback(LPWSABUF  lpCallerId,
 }
 #endif
 
-static printLastError(const char * text)
+static void printLastError(const char * text)
 {
     LPVOID buf;
 
@@ -1575,7 +1581,7 @@ static int acceptNamedPipe()
 {
     int ipcFd = -1;
 
-    if (! ConnectNamedPipe(hListen, &listenOverlapped))
+    if (! ConnectNamedPipe(hListen, NULL))
     {
         switch (GetLastError())
         {
@@ -1588,19 +1594,9 @@ static int acceptNamedPipe()
         
             case ERROR_IO_PENDING:
 
-                // Wait for a connection to complete.
-
-                while (WaitForSingleObject(listenOverlapped.hEvent, 
-                                           ACCEPT_TIMEOUT) == WAIT_TIMEOUT) 
-                {
-                    if (shutdownPending) 
-                    {
-                        OS_LibShutdown();
-                        return -1;
-                    }            
-                }
-
-                break;
+                // The NamedPipe was opened with an Overlapped structure
+                // and there is a pending io operation.  mod_fastcgi 
+                // did this in 2.2.12 (fcgi_pm.c v1.52).
 
             case ERROR_PIPE_LISTENING:
 
@@ -1642,7 +1638,10 @@ static int acceptSocket(const char *webServerAddrs)
             fd_set readfds;
 
             FD_ZERO(&readfds);
+
+#pragma warning( disable : 4127 ) 
             FD_SET((unsigned int) hListen, &readfds);
+#pragma warning( default : 4127 ) 
 
             if (select(0, &readfds, NULL, NULL, &timeout) == 0)
             {
@@ -1794,8 +1793,7 @@ int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs)
  */
 int OS_IpcClose(int ipcFd)
 {
-    if (ipcFd == -1)
-        return 0;
+    if (ipcFd == -1) return 0;
 
     /*
      * Catch it if fd is a bogus value
@@ -1803,33 +1801,32 @@ int OS_IpcClose(int ipcFd)
     ASSERT((ipcFd >= 0) && (ipcFd < WIN32_OPEN_MAX));
     ASSERT(fdTable[ipcFd].type != FD_UNUSED);
 
-    switch(listenType) {
-
+    switch (listenType) 
+    {
     case FD_PIPE_SYNC:
-	/*
-	 * Make sure that the client (ie. a Web Server in this case) has
-	 * read all data from the pipe before we disconnect.
-	 */
-	if(!FlushFileBuffers(fdTable[ipcFd].fid.fileHandle))
-	    return -1;
-	if(DisconnectNamedPipe(fdTable[ipcFd].fid.fileHandle)) {
-	    OS_Close(ipcFd);
-	    return 0;
-	} else {
-	    return -1;
-	}
-	break;
+	    /*
+	     * Make sure that the client (ie. a Web Server in this case) has
+	     * read all data from the pipe before we disconnect.
+	     */
+	    if (! FlushFileBuffers(fdTable[ipcFd].fid.fileHandle)) return -1;
+
+	    if (! DisconnectNamedPipe(fdTable[ipcFd].fid.fileHandle)) return -1;
+
+        /* fall through */
 
     case FD_SOCKET_SYNC:
-	OS_Close(ipcFd);
-        return 0;
-	break;
+
+	    OS_Close(ipcFd);
+	    break;
 
     case FD_UNUSED:
     default:
-	exit(106);
-	break;
+
+	    exit(106);
+	    break;
     }
+
+    return 0; 
 }
 
 /*

@@ -17,7 +17,7 @@
  */
 
 #ifndef lint
-static const char rcsid[] = "$Id: os_unix.c,v 1.34 2001/09/25 14:21:44 robs Exp $";
+static const char rcsid[] = "$Id: os_unix.c,v 1.37 2002/03/05 19:14:49 robs Exp $";
 #endif /* not lint */
 
 #include "fcgi_config.h"
@@ -285,7 +285,7 @@ union SockAddrUnion {
 int OS_CreateLocalIpcFd(const char *bindPath, int backlog)
 {
     int listenSock, servLen;
-    union   SockAddrUnion sa;
+    union   SockAddrUnion sa;  
     int	    tcp = FALSE;
     unsigned long tcp_ia = 0;
     char    *tp;
@@ -638,7 +638,7 @@ int OS_AsyncRead(int fd, int offset, void *buf, int len,
     if(fd > maxFd)
         maxFd = fd;
 
-    if(index >= asyncIoTableSize) {
+    while (index >= asyncIoTableSize) {
         GrowAsyncTable();
     }
 
@@ -687,7 +687,7 @@ int OS_AsyncWrite(int fd, int offset, void *buf, int len,
     if(fd > maxFd)
         maxFd = fd;
 
-    if(index >= asyncIoTableSize) {
+    while (index >= asyncIoTableSize) {
         GrowAsyncTable();
     }
 
@@ -744,6 +744,34 @@ int OS_Close(int fd)
             maxFd--;
         }
     }
+
+    /*
+     * shutdown() the send side and then read() from client until EOF
+     * or a timeout expires.  This is done to minimize the potential
+     * that a TCP RST will be sent by our TCP stack in response to 
+     * receipt of additional data from the client.  The RST would
+     * cause the client to discard potentially useful response data.
+     */
+
+    if (shutdown(fd, 1) == 0)
+    {
+        struct timeval tv;
+        fd_set rfds;
+        int rv;
+        char trash[1024];
+
+        FD_ZERO(&rfds);
+
+        do 
+        {
+            FD_SET(fd, &rfds);
+            tv.tv_sec = 2;
+            tv.tv_usec = 0;
+            rv = select(fd + 1, &rfds, NULL, NULL, &tv);
+        }
+        while (rv > 0 && read(fd, trash, sizeof(trash)) > 0);
+    }
+
     return close(fd);
 }
 
