@@ -18,11 +18,13 @@
 #ifndef _FCGIOS_H
 #define _FCGIOS_H
 
-#include "fcgi_config.h"
-
 #ifdef _WIN32
-#include <io.h>
+#define WIN32_LEAN_AND_MEAN 
+#include <windows.h>
+#include <winsock2.h>
 #endif
+
+#include "fcgi_config.h"
 
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
@@ -32,27 +34,25 @@
 extern "C" {
 #endif
 
-
 #ifdef _WIN32
-
 #define OS_Errno GetLastError()
 #define OS_SetErrno(err) SetLastError(err)
-
-#ifndef DLLAPI
-#define DLLAPI __declspec(dllimport)
-#endif
-
 #ifndef O_NONBLOCK
 #define O_NONBLOCK     0x0004  /* no delay */
 #endif
-
 #else /* !_WIN32 */
-
-#define DLLAPI
 #define OS_Errno errno
 #define OS_SetErrno(err) errno = (err)
-
 #endif /* !_WIN32 */
+
+#ifndef DLLAPI
+#ifdef _WIN32
+#define DLLAPI __declspec(dllimport)
+#else
+#define DLLAPI
+#endif
+#endif
+
 
 /* This is the initializer for a "struct timeval" used in a select() call
  * right after a new request is accept()ed to determine readablity.  Its
@@ -116,6 +116,8 @@ DLLAPI int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAdd
 DLLAPI int OS_IpcClose(int ipcFd);
 DLLAPI int OS_IsFcgi(int sock);
 DLLAPI void OS_SetFlags(int fd, int flags);
+
+DLLAPI void OS_ShutdownPending(void);
 
 #if defined (__cplusplus) || defined (c_plusplus)
 } /* terminate extern "C" { */

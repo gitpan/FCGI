@@ -17,7 +17,7 @@
  */
 
 #ifndef lint
-static const char rcsid[] = "$Id: os_unix.c,v 1.25 2001/04/30 15:00:50 skimo Exp $";
+static const char rcsid[] = "$Id: os_unix.c,v 1.32 2001/09/14 19:43:27 robs Exp $";
 #endif /* not lint */
 
 #include "fcgi_config.h"
@@ -41,6 +41,7 @@ static const char rcsid[] = "$Id: os_unix.c,v 1.25 2001/04/30 15:00:50 skimo Exp
 #include <string.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <signal.h>
 
 #ifdef HAVE_NETDB_H
 #include <netdb.h>
@@ -55,18 +56,8 @@ static const char rcsid[] = "$Id: os_unix.c,v 1.25 2001/04/30 15:00:50 skimo Exp
 #endif
 
 #include "fastcgi.h"
-#include "fcgiapp.h"
-#include "fcgiappmisc.h"
 #include "fcgimisc.h"
 #include "fcgios.h"
-
-#ifndef FALSE
-#define FALSE 0
-#endif
-
-#ifndef TRUE
-#define TRUE 1
-#endif
 
 #ifndef INADDR_NONE
 #define INADDR_NONE ((unsigned long) -1)
@@ -109,6 +100,50 @@ static fd_set writeFdSetPost;
 static int numWrPosted = 0;
 static int volatile maxFd = -1;
 
+static int shutdownPending = FALSE;
+static int shutdownNow = FALSE;
+
+void OS_ShutdownPending()
+{
+    shutdownPending = TRUE;
+}
+
+static void OS_Sigusr1Handler(int signo)
+{
+    OS_ShutdownPending();
+}
+
+static void OS_SigpipeHandler(int signo)
+{
+    ;
+}
+
+static void installSignalHandler(int signo, const struct sigaction * act, int force)
+{
+    struct sigaction sa;
+
+    sigaction(signo, NULL, &sa);
+
+    if (force || sa.sa_handler == SIG_DFL) 
+    {
+        sigaction(signo, act, NULL);
+    }
+}
+
+static void OS_InstallSignalHandlers(int force)
+{
+    struct sigaction sa;
+
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    sa.sa_handler = OS_SigpipeHandler;
+    installSignalHandler(SIGPIPE, &sa, force);
+
+    sa.sa_handler = OS_Sigusr1Handler;
+    installSignalHandler(SIGUSR1, &sa, force);
+}
+
 /*
  *--------------------------------------------------------------
  *
@@ -145,7 +180,11 @@ int OS_LibInit(int stdioFds[3])
     FD_ZERO(&writeFdSet);
     FD_ZERO(&readFdSetPost);
     FD_ZERO(&writeFdSetPost);
+
+    OS_InstallSignalHandlers(FALSE);
+
     libInitialized = TRUE;
+
     return 0;
 }
 
@@ -417,6 +456,7 @@ int OS_FcgiConnect(char *bindPath)
  */
 int OS_Read(int fd, char * buf, size_t len)
 {
+    if (shutdownNow) return -1;
     return(read(fd, buf, len));
 }
 
@@ -438,6 +478,7 @@ int OS_Read(int fd, char * buf, size_t len)
  */
 int OS_Write(int fd, char * buf, size_t len)
 {
+    if (shutdownNow) return -1;
     return(write(fd, buf, len));
 }
 
@@ -850,7 +891,7 @@ int OS_DoIo(struct timeval *tmo)
  * Not all systems have strdup().  
  * @@@ autoconf should determine whether or not this is needed, but for now..
  */
-char * str_dup(const char * str)
+static char * str_dup(const char * str)
 {
     char * sdup = (char *) malloc(strlen(str) + 1);
 
@@ -929,7 +970,9 @@ static int AcquireLock(int sock, int fail_on_intr)
 
         if (fcntl(sock, F_SETLKW, &lock) != -1)
             return 0;
-    } while (errno == EINTR && !fail_on_intr);
+    } while (errno == EINTR 
+             && ! fail_on_intr 
+             && ! shutdownPending);
 
     return -1;
 
@@ -1072,7 +1115,7 @@ static int is_af_unix_keeper(const int fd)
  */
 int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs)
 {
-    int socket;
+    int socket = -1;
     union {
         struct sockaddr_un un;
         struct sockaddr_in in;
@@ -1089,14 +1132,25 @@ int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs)
 #else
                 int len = sizeof(sa);
 #endif
+                if (shutdownPending) break;
+                /* There's a window here */
+
                 socket = accept(listen_sock, (struct sockaddr *)&sa, &len);
-            } while (socket < 0 && errno == EINTR && !fail_on_intr);
+            } while (socket < 0 
+                     && errno == EINTR 
+                     && ! fail_on_intr 
+                     && ! shutdownPending);
 
             if (socket < 0) {
-                if (!is_reasonable_accept_errno(errno)) {
+                if (shutdownPending || ! is_reasonable_accept_errno(errno)) {
                     int errnoSave = errno;
+
                     ReleaseLock(listen_sock);
-                    errno = errnoSave;
+                    
+                    if (! shutdownPending) {
+                        errno = errnoSave;
+                    }
+
                     return (-1);
                 }
                 errno = 0;

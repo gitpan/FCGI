@@ -11,14 +11,8 @@
  *
  */
 #ifndef lint
-static const char rcsid[] = "$Id: fcgiapp.c,v 1.18 2000/11/05 19:04:36 robs Exp $";
+static const char rcsid[] = "$Id: fcgiapp.c,v 1.30 2001/09/14 19:43:26 robs Exp $";
 #endif /* not lint */
-
-#include "fcgi_config.h"
-
-#ifdef _WIN32
-#define DLLAPI  __declspec(dllexport)
-#endif
 
 #include <assert.h>
 #include <errno.h>
@@ -30,6 +24,8 @@ static const char rcsid[] = "$Id: fcgiapp.c,v 1.18 2000/11/05 19:04:36 robs Exp 
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+
+#include "fcgi_config.h"
 
 #ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h> /* for getpeername */
@@ -43,8 +39,15 @@ static const char rcsid[] = "$Id: fcgiapp.c,v 1.18 2000/11/05 19:04:36 robs Exp 
 #include <unistd.h>
 #endif
 
+#ifdef HAVE_LIMITS_H
+#include <limits.h>
+#endif
+
+#ifdef _WIN32
+#define DLLAPI  __declspec(dllexport)
+#endif
+
 #include "fcgimisc.h"
-#include "fcgiappmisc.h"
 #include "fastcgi.h"
 #include "fcgios.h"
 #include "fcgiapp.h"
@@ -68,6 +71,11 @@ static int isFastCGI = -1;
 static char *webServerAddressList = NULL;
 static FCGX_Request the_request;
 
+void FCGX_ShutdownPending(void)
+{
+    OS_ShutdownPending();
+}
+
 static void *Malloc(size_t size)
 {
     void *result = malloc(size);
@@ -84,7 +92,7 @@ static char *StringCopy(char *str)
     return newString;
 }
 
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -110,7 +118,7 @@ int FCGX_GetChar(FCGX_Stream *stream)
     ASSERT(stream->isClosed); /* bug in fillBufProc if not */
     return EOF;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -162,7 +170,7 @@ int FCGX_GetStr(char *str, int n, FCGX_Stream *stream)
         stream->stopUnget = stream->rdNext;
     }
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -184,6 +192,7 @@ char *FCGX_GetLine(char *str, int n, FCGX_Stream *stream)
 {
     int c;
     char *p = str;
+
     n--;
     while (n > 0) {
         c = FCGX_GetChar(stream);
@@ -193,7 +202,7 @@ char *FCGX_GetLine(char *str, int n, FCGX_Stream *stream)
             else
                 break;
         }
-        *p++ = c;
+        *p++ = (char) c;
         n--;
         if(c == '\n')
             break;
@@ -201,7 +210,7 @@ char *FCGX_GetLine(char *str, int n, FCGX_Stream *stream)
     *p = '\0';
     return str;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -223,7 +232,7 @@ int FCGX_UnGetChar(int c, FCGX_Stream *stream) {
             || stream->rdNext == stream->stopUnget)
         return EOF;
     --(stream->rdNext);
-    *stream->rdNext = c;
+    *stream->rdNext = (unsigned char) c;
     return c;
 }
 
@@ -248,7 +257,7 @@ int FCGX_UnGetChar(int c, FCGX_Stream *stream) {
 int FCGX_HasSeenEOF(FCGX_Stream *stream) {
     return (stream->isClosed) ? EOF : 0;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -264,16 +273,16 @@ int FCGX_HasSeenEOF(FCGX_Stream *stream) {
 int FCGX_PutChar(int c, FCGX_Stream *stream)
 {
     if(stream->wrNext != stream->stop)
-        return (*stream->wrNext++ = c);
+        return (*stream->wrNext++ = (unsigned char) c);
     if(stream->isClosed || stream->isReader)
         return EOF;
     stream->emptyBuffProc(stream, FALSE);
     if(stream->wrNext != stream->stop)
-        return (*stream->wrNext++ = c);
+        return (*stream->wrNext++ = (unsigned char) c);
     ASSERT(stream->isClosed); /* bug in emptyBuffProc if not */
     return EOF;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -321,7 +330,7 @@ int FCGX_PutStr(const char *str, int n, FCGX_Stream *stream)
         stream->emptyBuffProc(stream, FALSE);
     }
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -339,7 +348,7 @@ int FCGX_PutS(const char *str, FCGX_Stream *stream)
 {
     return FCGX_PutStr(str, strlen(str), stream);
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -393,8 +402,8 @@ static void CopyAndAdvance(char **destPtr, char **srcPtr, int n);
 int FCGX_VFPrintF(FCGX_Stream *stream, const char *format, va_list arg)
 {
     char *f, *fStop, *percentPtr, *p, *fmtBuffPtr, *buffPtr;
-    int op, performedOp, sizeModifier, buffCount, buffLen, specifierLength;
-    int fastPath, n, auxBuffLen, buffReqd, minWidth, precision, exp;
+    int op, performedOp, sizeModifier, buffCount = 0, buffLen, specifierLength;
+    int fastPath, n, auxBuffLen = 0, buffReqd, minWidth, precision, exp;
     char *auxBuffPtr = NULL;
     int streamCount = 0;
     char fmtBuff[FMT_BUFFLEN];
@@ -406,13 +415,13 @@ int FCGX_VFPrintF(FCGX_Stream *stream, const char *format, va_list arg)
     unsigned unsignedArg;
     unsigned long uLongArg;
     unsigned short uShortArg;
-    char *charPtrArg;
+    char *charPtrArg = NULL;
     void *voidPtrArg;
     int *intPtrArg;
     long *longPtrArg;
     short *shortPtrArg;
-    double doubleArg;
-    LONG_DOUBLE lDoubleArg;
+    double doubleArg = 0.0;
+    LONG_DOUBLE lDoubleArg = 0.0L;
 
     fmtBuff[0] = '%';
     f = (char *) format;
@@ -451,14 +460,14 @@ int FCGX_VFPrintF(FCGX_Stream *stream, const char *format, va_list arg)
                     case 'h':
                         sizeModifier = op;
                         op = *(percentPtr + 2);
-                        fmtBuff[1] = sizeModifier;
-                        fmtBuff[2] = op;
+                        fmtBuff[1] = (char) sizeModifier;
+                        fmtBuff[2] = (char) op;
                         fmtBuff[3] = '\0';
                         specifierLength = 3;
                         break;
 	            default:
                         sizeModifier = ' ';
-                        fmtBuff[1] = op;
+                        fmtBuff[1] = (char) op;
                         fmtBuff[2] = '\0';
                         specifierLength = 2;
                         break;
@@ -588,11 +597,13 @@ int FCGX_VFPrintF(FCGX_Stream *stream, const char *format, va_list arg)
                         switch(sizeModifier) {
                             case ' ':
                                 doubleArg = va_arg(arg, double);
-				frexp(doubleArg, &exp);
+				                frexp(doubleArg, &exp);
                                 break;
                             case 'L':
                                 lDoubleArg = va_arg(arg, LONG_DOUBLE);
-				frexp(lDoubleArg, &exp);
+                                /* XXX Need to check for the presence of 
+                                 * frexpl() and use it if available */
+				                frexp((double) lDoubleArg, &exp);
                                 break;
                             default:
                                 goto ErrorReturn;
@@ -751,8 +762,8 @@ int FCGX_VFPrintF(FCGX_Stream *stream, const char *format, va_list arg)
                             *longPtrArg = streamCount;
                             break;
                         case 'h':
-                            shortPtrArg = va_arg(arg, short *);
-                            *shortPtrArg = streamCount;
+                            shortPtrArg = (short *) va_arg(arg, short *);
+                            *shortPtrArg = (short) streamCount;
                             break;
 	                default:
                             goto ErrorReturn;
@@ -845,7 +856,7 @@ static void CopyAndAdvance(char **destPtr, char **srcPtr, int n)
     *destPtr = dest;
     *srcPtr = src;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -871,7 +882,7 @@ int FCGX_FFlush(FCGX_Stream *stream)
     stream->emptyBuffProc(stream, FALSE);
     return (stream->isClosed) ? -1 : 0;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -907,7 +918,7 @@ int FCGX_FClose(FCGX_Stream *stream)
     }
     return (stream->FCGI_errno == 0) ? 0 : EOF;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -967,7 +978,7 @@ void FCGX_ClearError(FCGX_Stream *stream) {
      * of the stream that are now all lumped under isClosed.
      */
 }
-
+
 /*
  *======================================================================
  * Parameters
@@ -986,7 +997,7 @@ typedef struct Params {
     char **cur;		    /* current item in vec; *cur == NULL */
 } Params;
 typedef Params *ParamsPtr;
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1009,7 +1020,7 @@ static ParamsPtr NewParams(int length)
     *result->cur = NULL;
     return result;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1036,7 +1047,7 @@ static void FreeParams(ParamsPtr *paramsPtrPtr)
     free(paramsPtr);
     *paramsPtrPtr = NULL;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1065,7 +1076,7 @@ static void PutParam(ParamsPtr paramsPtr, char *nameValue)
     }
     *paramsPtr->cur = NULL;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1083,16 +1094,19 @@ char *FCGX_GetParam(const char *name, FCGX_ParamArray envp)
 {
     int len;
     char **p;
+
+	if (name == NULL || envp == NULL) return NULL;
+
     len = strlen(name);
-    if(len == 0) return NULL;
-    for (p = envp; *p != NULL; p++) {
+
+    for (p = envp; *p; ++p) {
         if((strncmp(name, *p, len) == 0) && ((*p)[len] == '=')) {
             return *p+len+1;
         }
     }
     return NULL;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1100,7 +1114,7 @@ char *FCGX_GetParam(const char *name, FCGX_ParamArray envp)
  *
  *----------------------------------------------------------------------
  */
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1164,7 +1178,7 @@ static int ReadParams(Params *paramsPtr, FCGX_Stream *stream)
     }
     return 0;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1184,16 +1198,16 @@ static FCGI_Header MakeHeader(
     ASSERT(contentLength >= 0 && contentLength <= FCGI_MAX_LENGTH);
     ASSERT(paddingLength >= 0 && paddingLength <= 0xff);
     header.version = FCGI_VERSION_1;
-    header.type             =  type;
-    header.requestIdB1      = (requestId      >> 8) & 0xff;
-    header.requestIdB0      = (requestId          ) & 0xff;
-    header.contentLengthB1  = (contentLength  >> 8) & 0xff;
-    header.contentLengthB0  = (contentLength      ) & 0xff;
-    header.paddingLength    =  paddingLength;
+    header.type             = (unsigned char) type;
+    header.requestIdB1      = (unsigned char) ((requestId     >> 8) & 0xff);
+    header.requestIdB0      = (unsigned char) ((requestId         ) & 0xff);
+    header.contentLengthB1  = (unsigned char) ((contentLength >> 8) & 0xff);
+    header.contentLengthB0  = (unsigned char) ((contentLength     ) & 0xff);
+    header.paddingLength    = (unsigned char) paddingLength;
     header.reserved         =  0;
     return header;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1208,15 +1222,15 @@ static FCGI_EndRequestBody MakeEndRequestBody(
         int protocolStatus)
 {
     FCGI_EndRequestBody body;
-    body.appStatusB3 = (appStatus >> 24) & 0xff;
-    body.appStatusB2 = (appStatus >> 16) & 0xff;
-    body.appStatusB1 = (appStatus >>  8) & 0xff;
-    body.appStatusB0 = (appStatus      ) & 0xff;
-    body.protocolStatus = protocolStatus;
+    body.appStatusB3    = (unsigned char) ((appStatus >> 24) & 0xff);
+    body.appStatusB2    = (unsigned char) ((appStatus >> 16) & 0xff);
+    body.appStatusB1    = (unsigned char) ((appStatus >>  8) & 0xff);
+    body.appStatusB0    = (unsigned char) ((appStatus      ) & 0xff);
+    body.protocolStatus = (unsigned char) protocolStatus;
     memset(body.reserved, 0, sizeof(body.reserved));
     return body;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1230,11 +1244,11 @@ static FCGI_UnknownTypeBody MakeUnknownTypeBody(
         int type)
 {
     FCGI_UnknownTypeBody body;
-    body.type = type;
+    body.type = (unsigned char) type;
     memset(body.reserved, 0, sizeof(body.reserved));
     return body;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1264,7 +1278,7 @@ static unsigned char *AlignPtr8(unsigned char *p) {
     u = ((u + 7) & (ULONG_MAX - 7)) - u;
     return p + u;
 }
-
+
 
 /*
  * State associated with a stream
@@ -1287,7 +1301,7 @@ typedef struct FCGX_Stream_Data {
     int rawWrite;             /* writer: write data without stream headers */
     FCGX_Request *reqDataPtr; /* request data not specific to one stream */
 } FCGX_Stream_Data;
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1332,7 +1346,7 @@ static void WriteCloseRecords(struct FCGX_Stream *stream)
     }
     data->reqDataPtr->nWriters--;
 }
-
+
 
 
 static int write_it_all(int fd, char *buf, int len)
@@ -1404,7 +1418,7 @@ static void EmptyBuffProc(struct FCGX_Stream *stream, int doClose)
         stream->wrNext += sizeof(FCGI_Header);
     }
 }
-
+
 /*
  * Return codes for Process* functions
  */
@@ -1434,7 +1448,7 @@ static int ProcessManagementRecord(int type, FCGX_Stream *stream)
     char **pPtr;
     char response[64]; /* 64 = 8 + 3*(1+1+14+1)* + padding */
     char *responseP = &response[FCGI_HEADER_LEN];
-    char *name, value;
+    char *name, value = '\0';
     int len, paddedLen;
     if(type == FCGI_GET_VALUES) {
         ReadParams(paramsPtr, stream);
@@ -1481,7 +1495,7 @@ static int ProcessManagementRecord(int type, FCGX_Stream *stream)
 
     return MGMT_RECORD;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1538,7 +1552,7 @@ static int ProcessBeginRecord(int requestId, FCGX_Stream *stream)
     data->reqDataPtr->isBeginProcessed = TRUE;
     return BEGIN_RECORD;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1587,7 +1601,7 @@ static int ProcessHeader(FCGI_Header header, FCGX_Stream *stream)
     }
     return STREAM_RECORD;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1716,7 +1730,7 @@ static void FillBuffProc(FCGX_Stream *stream)
 	}
     }
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1783,18 +1797,18 @@ static FCGX_Stream *NewStream(
     }
     return stream;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
- * FreeStream --
+ * FCGX_FreeStream --
  *
  *      Frees all storage allocated when *streamPtr was created,
  *      and nulls out *streamPtr.
  *
  *----------------------------------------------------------------------
  */
-void FreeStream(FCGX_Stream **streamPtr)
+void FCGX_FreeStream(FCGX_Stream **streamPtr)
 {
     FCGX_Stream *stream = *streamPtr;
     FCGX_Stream_Data *data;
@@ -1808,7 +1822,7 @@ void FreeStream(FCGX_Stream **streamPtr)
     free(stream);
     *streamPtr = NULL;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1831,7 +1845,7 @@ static FCGX_Stream *SetReaderType(FCGX_Stream *stream, int streamType)
     stream->isClosed = FALSE;
     return stream;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1846,7 +1860,6 @@ static FCGX_Stream *NewReader(FCGX_Request *reqDataPtr, int bufflen, int streamT
 {
     return NewStream(reqDataPtr, bufflen, TRUE, streamType);
 }
-
 
 /*
  *----------------------------------------------------------------------
@@ -1864,11 +1877,10 @@ static FCGX_Stream *NewWriter(FCGX_Request *reqDataPtr, int bufflen, int streamT
     return NewStream(reqDataPtr, bufflen, FALSE, streamType);
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
- * CreateWriter --
+ * FCGX_CreateWriter --
  *
  *      Creates a stream to write streamType FastCGI records, using
  *      the given ipcFd and request Id.  This function is provided
@@ -1877,7 +1889,7 @@ static FCGX_Stream *NewWriter(FCGX_Request *reqDataPtr, int bufflen, int streamT
  *
  *----------------------------------------------------------------------
  */
-FCGX_Stream *CreateWriter(
+FCGX_Stream *FCGX_CreateWriter(
         int ipcFd,
         int requestId,
         int bufflen,
@@ -1892,7 +1904,7 @@ FCGX_Stream *CreateWriter(
     reqDataPtr->nWriters = 2;
     return NewWriter(reqDataPtr, bufflen, streamType);
 }
-
+
 /*
  *======================================================================
  * Control
@@ -1932,7 +1944,7 @@ int FCGX_IsCGI(void)
 
     return !isFastCGI;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -1979,37 +1991,36 @@ void FCGX_Finish(void)
  */
 void FCGX_Finish_r(FCGX_Request *reqDataPtr)
 {
+    int close;
+
     if (reqDataPtr == NULL) {
         return;
     }
 
+    close = !reqDataPtr->keepConnection;
+
     /* This should probably use a 'status' member instead of 'in' */
     if (reqDataPtr->in) {
-        int errStatus = FCGX_FClose(reqDataPtr->err);
-        int outStatus = FCGX_FClose(reqDataPtr->out);
+        close |= FCGX_FClose(reqDataPtr->err);
+        close |= FCGX_FClose(reqDataPtr->out);
 
-        if (errStatus || outStatus || FCGX_GetError(reqDataPtr->in))
-        {
-            OS_IpcClose(reqDataPtr->ipcFd);
-            reqDataPtr->ipcFd = -1;
-        }
+	close |= FCGX_GetError(reqDataPtr->in);
     }
 
-    FCGX_Free(reqDataPtr);
+    FCGX_Free(reqDataPtr, close);
 }
 
-void FCGX_Free(FCGX_Request * request)
+void FCGX_Free(FCGX_Request * request, int close)
 {
     if (request == NULL) 
         return;
 
-    FreeStream(&request->in);
-    FreeStream(&request->out);
-    FreeStream(&request->err);
+    FCGX_FreeStream(&request->in);
+    FCGX_FreeStream(&request->out);
+    FCGX_FreeStream(&request->err);
     FreeParams(&request->paramsPtr);
 
-    if (!request->keepConnection)
-    {
+    if (close) {
         OS_IpcClose(request->ipcFd);
         request->ipcFd = -1;
     }
@@ -2061,9 +2072,6 @@ int FCGX_Init(void)
         return 0;
     }
 
-    /* If our compiler doesn't play by the ISO rules for struct layout, halt. */
-    ASSERT(sizeof(FCGI_Header) == FCGI_HEADER_LEN);
-
     FCGX_InitRequest(&the_request, FCGI_LISTENSOCK_FILENO, 0);
 
     if (OS_LibInit(NULL) == -1) {
@@ -2113,9 +2121,10 @@ int FCGX_Accept(
 {
     int rc;
 
-    if (!libInitialized) {
-        if ((rc = FCGX_Init())) {
-            return (rc < 0) ? rc : -rc;
+    if (! libInitialized) {
+        rc = FCGX_Init();
+        if (rc) {
+            return rc;
         }
     }
 
@@ -2221,7 +2230,7 @@ int FCGX_Accept_r(FCGX_Request *reqDataPtr)
          * Close the connection and try again.
          */
 TryAgain:
-        FCGX_Free(reqDataPtr);
+        FCGX_Free(reqDataPtr, 1);
 
     } /* for (;;) */
     /*
@@ -2235,7 +2244,7 @@ TryAgain:
     reqDataPtr->envp = reqDataPtr->paramsPtr->vec;
     return 0;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *
@@ -2267,7 +2276,7 @@ int FCGX_StartFilterData(FCGX_Stream *stream)
     SetReaderType(stream, FCGI_DATA);
     return 0;
 }
-
+
 /*
  *----------------------------------------------------------------------
  *

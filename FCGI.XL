@@ -12,7 +12,7 @@ unless ($] >= 5.005) {
 print OUT while <DATA>;
 close OUT;
 __END__
-/* $Id: FCGI.XL,v 1.1 2000/12/31 21:46:58 skimo Exp $ */
+/* $Id: FCGI.XL,v 1.6 2001/09/20 12:00:24 skimo Exp $ */
 
 #include "EXTERN.h"
 #include "perl.h"
@@ -110,20 +110,20 @@ typedef struct FCGP_Request {
 
 static void FCGI_Finish(FCGP_Request* request);
 
-static int 
+static void 
 FCGI_Flush(FCGP_Request* request)
 {
     dTHX;
 
     if(!request->bound) {
 	return;
-    }
+	}
 #ifdef USE_SFIO
     sfsync(IoOFP(GvIOp(request->gv[1])));
     sfsync(IoOFP(GvIOp(request->gv[2])));
 #else
-    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(request->svout)));
-    FCGX_FFlush((FCGX_Stream *) SvIV((SV*) SvRV(request->sverr)));
+    FCGX_FFlush(INT2PTR(FCGX_Stream *, SvIV((SV*) SvRV(request->svout))));
+    FCGX_FFlush(INT2PTR(FCGX_Stream *, SvIV((SV*) SvRV(request->sverr))));
 #endif
 }
 
@@ -256,9 +256,9 @@ FCGI_Accept(FCGP_Request* request)
 	    newSVrv(request->sverr = newSV(0), "FCGI::Stream");
 	    newSVrv(request->svin = newSV(0), "FCGI::Stream");
 	}
-	sv_setiv(SvRV(request->svout), (IV) fcgx_req->out);
-	sv_setiv(SvRV(request->sverr), (IV) fcgx_req->err);
-	sv_setiv(SvRV(request->svin), (IV) fcgx_req->in);
+	sv_setiv(SvRV(request->svout), INT2PTR(IV, fcgx_req->out));
+	sv_setiv(SvRV(request->sverr), INT2PTR(IV, fcgx_req->err));
+	sv_setiv(SvRV(request->svin), INT2PTR(IV, fcgx_req->in));
 #endif
 	FCGI_Bind(request);
 	request->accepted = TRUE;
@@ -294,7 +294,7 @@ FCGI_Finish(FCGP_Request* request)
     if (was_bound)
 	FCGX_Finish_r(request->requestPtr);
     else
-	FCGX_Free(request->requestPtr);
+	FCGX_Free(request->requestPtr, 1);
     request->accepted = FALSE;
 }
 
@@ -321,9 +321,13 @@ FCGI_Request(in, out, err, env, socket, flags)
     FCGX_InitRequest(fcgx_req, socket, flags);
     Newz(551, req, 1, FCGP_Request);
     req->requestPtr = fcgx_req;
+    SvREFCNT_inc(in);
     req->gv[0] = in;
+    SvREFCNT_inc(out);
     req->gv[1] = out;
+    SvREFCNT_inc(err);
     req->gv[2] = err;
+    SvREFCNT_inc(env);
     req->hvEnv = env;
 
     return req;
@@ -332,6 +336,10 @@ FCGI_Request(in, out, err, env, socket, flags)
 static void
 FCGI_Release_Request(FCGP_Request *req)
 {
+    SvREFCNT_dec(req->gv[0]);
+    SvREFCNT_dec(req->gv[1]);
+    SvREFCNT_dec(req->gv[2]);
+    SvREFCNT_dec(req->hvEnv);
     FCGI_Finish(req);
     Safefree(req->requestPtr);
     Safefree(req);
@@ -448,7 +456,6 @@ FCGI_IsFastCGI(request)
 
 void
 Detach(request)
-
     FCGI    request;
 
     PROTOTYPE: $
@@ -459,7 +466,6 @@ Detach(request)
 
 void
 Attach(request)
-
     FCGI    request;
 
     PROTOTYPE: $
@@ -468,6 +474,14 @@ Attach(request)
     if (request->accepted && !request->bound)
 	FCGI_Bind(request);
 
+void
+LastCall(request)
+    FCGI    request;
+
+    PROTOTYPE: $
+
+    CODE:
+    FCGX_ShutdownPending();
 
 int
 FCGI_StartFilterData(request)

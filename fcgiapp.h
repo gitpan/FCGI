@@ -9,7 +9,7 @@
  * See the file "LICENSE.TERMS" for information on usage and redistribution
  * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
  *
- * $Id: fcgiapp.h,v 1.5 2000/11/05 17:09:36 robs Exp $
+ * $Id: fcgiapp.h,v 1.10 2001/09/14 19:43:31 robs Exp $
  */
 
 #ifndef _FCGIAPP_H
@@ -26,17 +26,13 @@
 extern "C" {
 #endif
 
-#ifdef _WIN32
-
 #ifndef DLLAPI
+#ifdef _WIN32
 #define DLLAPI __declspec(dllimport)
-#endif
-
-#else  /* !_WIN32 */
-
+#else
 #define DLLAPI
-
-#endif /* !_WIN32 */
+#endif
+#endif
 
 /*
  * Error codes.  Assigned to avoid conflict with EOF and errno(2).
@@ -236,11 +232,12 @@ DLLAPI void FCGX_Finish_r(FCGX_Request *request);
  *
  * FCGX_Free --
  *
- *      Free the memory and IPC FD associated with the request (multi-thread safe).
+ *      Free the memory and, if close is true, 
+ *	    IPC FD associated with the request (multi-thread safe).
  *
  *----------------------------------------------------------------------
  */
-DLLAPI void FCGX_Free(FCGX_Request * request);
+DLLAPI void FCGX_Free(FCGX_Request * request, int close);
 
 /*
  *----------------------------------------------------------------------
@@ -582,6 +579,41 @@ DLLAPI int FCGX_GetError(FCGX_Stream *stream);
  */
 DLLAPI void FCGX_ClearError(FCGX_Stream *stream);
 
+/*
+ *----------------------------------------------------------------------
+ *
+ * FCGX_CreateWriter --
+ *
+ *      Create a FCGX_Stream (used by cgi-fcgi).  This shouldn't 
+ *      be needed by a FastCGI applictaion.
+ *
+ *----------------------------------------------------------------------
+ */
+DLLAPI FCGX_Stream *FCGX_CreateWriter(
+        int socket,
+        int requestId,
+        int bufflen,
+        int streamType);
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * FCGX_FreeStream --
+ *
+ *      Free a FCGX_Stream (used by cgi-fcgi).  This shouldn't 
+ *      be needed by a FastCGI applictaion.
+ *
+ *----------------------------------------------------------------------
+ */
+DLLAPI void FCGX_FreeStream(FCGX_Stream **stream);
+
+/* ----------------------------------------------------------------------
+ *
+ *  Prevent the lib from accepting any new requests.  Signal handler safe.
+ *
+ * ----------------------------------------------------------------------
+ */
+DLLAPI void FCGX_ShutdownPending(void);
 
 #if defined (__cplusplus) || defined (c_plusplus)
 } /* terminate extern "C" { */

@@ -6,7 +6,7 @@ open OUT, ">FCGI.pm";
 
 print "Generating FCGI.pm\n";
 print OUT <<'EOP';
-# $Id: FCGI.PL,v 1.25 2001/06/07 13:17:56 skimo Exp $
+# $Id: FCGI.PL,v 1.30 2001/09/20 12:00:23 skimo Exp $
 
 package FCGI;
 
@@ -21,7 +21,7 @@ require DynaLoader;
 	
 );
 
-$VERSION = '0.60';
+$VERSION = '0.61';
 
 EOP
 
@@ -47,12 +47,19 @@ use constant FILTER => 3;
 		      AUTHORIZER, "AUTHORIZER",
 		      FILTER, "FILTER",
 		     );
+
+# This only works on Unix; anyone familiar with Windows is welcome
+# to give a hand here
 sub IsFastCGI {
     my ($req) = @_;
     $req->{isfastcgi} =
 	(!defined getpeername shift->{listen_sock}) && $! == ENOTCONN
 	unless exists $req->{isfastcgi};
     return $req->{isfastcgi};
+}
+
+sub GetEnvironment {
+    return shift->{'env'};
 }
 
 sub read_nv_len {
@@ -76,6 +83,7 @@ sub RequestX {
 	env => shift,
 	socket => shift,
 	flags => shift,
+	last => 0,
     };
     open $self->{listen_sock}, "<&=0";
     bless $self, "FCGI";
@@ -94,7 +102,7 @@ sub Accept {
     }
     $req->Finish();
     $req->{socket} = gensym();
-    if (!accept($req->{socket}, $req->{listen_sock})) {
+    if ($req->{last} || !accept($req->{socket}, $req->{listen_sock})) {
 	$req->{error} = "accept";
 	return -1;
     }
@@ -160,6 +168,10 @@ sub Finish {
 	close ${$req->{err}};
     }
     $req->{accepted} = 0;
+}
+
+sub LastCall {
+    shift->{last} = 1;
 }
 
 sub DESTROY {
@@ -261,8 +273,9 @@ __END__
 
 *FAIL_ACCEPT_ON_INTR = sub() { 1 };
 
-sub Request(;***$$$) {
+sub Request(;***$*$) {
     my @defaults = (\*STDIN, \*STDOUT, \*STDERR, \%ENV, 0, 0);
+    $_[4] = fileno($_[4]) if defined(fileno($_[4]));
     splice @defaults,0,@_,@_;
     RequestX(@defaults);
 }
@@ -511,6 +524,14 @@ Temporarily detaches filehandles on an accepted connection.
 =item $req->Attach()
 
 Re-attaches filehandles on an accepted connection.
+
+=item $req->LastCall()
+
+Tells the library not to accept any more requests on this handle.
+It should be safe to call this method from signal handlers.
+
+Note that this method is still experimental and everything
+about it, including its name, is subject to change.
 
 =item $env = $req->GetEnvironment()
 
