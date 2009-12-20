@@ -17,7 +17,7 @@
  *  significantly more enjoyable.)
  */
 #ifndef lint
-static const char rcsid[] = "$Id: os_win32.c,v 1.33 2002/03/05 18:15:15 robs Exp $";
+static const char rcsid[] = "$Id: os_win32.c,v 1.35 2004/01/31 17:47:07 robs Exp $";
 #endif /* not lint */
 
 #define WIN32_LEAN_AND_MEAN 
@@ -28,6 +28,7 @@ static const char rcsid[] = "$Id: os_win32.c,v 1.33 2002/03/05 18:15:15 robs Exp
 #include <stdio.h>
 #include <sys/timeb.h>
 #include <process.h>
+#include <signal.h>
 
 #define DLLAPI  __declspec(dllexport)
 
@@ -276,6 +277,9 @@ static void ShutdownRequestThread(void * arg)
     WaitForSingleObject(shutdownEvent, INFINITE);
 
     shutdownPending = TRUE;
+
+    // emulate the unix behaviour
+    raise(SIGTERM);
 
     if (listenType == FD_PIPE_SYNC)
     {
@@ -1352,7 +1356,7 @@ int OS_AsyncWrite(int fd, int offset, void *buf, int len,
  *
  *--------------------------------------------------------------
  */
-int OS_Close(int fd)
+int OS_Close(int fd, int shutdown_ok)
 {
     int ret = 0;
 
@@ -1381,24 +1385,30 @@ int OS_Close(int fd)
          * cause the client to discard potentially useful response data.
          */
 
-        if (shutdown(fdTable[fd].fid.sock, SD_SEND) == 0)
+        if (shutdown_ok)
         {
-            struct timeval tv;
-            fd_set rfds;
-            int sock = fdTable[fd].fid.sock;
-            int rv;
-            char trash[1024];
-   
-            FD_ZERO(&rfds);
-
-            do 
+            if (shutdown(fdTable[fd].fid.sock, SD_SEND) == 0)
             {
-	            FD_SET(sock, &rfds);
+                struct timeval tv;
+                fd_set rfds;
+                int sock = fdTable[fd].fid.sock;
+                int rv;
+                char trash[1024];
+   
+                FD_ZERO(&rfds);
+
+                do 
+                {
+#pragma warning( disable : 4127 ) 
+	            FD_SET((unsigned) sock, &rfds);
+#pragma warning( default : 4127 )
+                    
 	            tv.tv_sec = 2;
 	            tv.tv_usec = 0;
 	            rv = select(sock + 1, &rfds, NULL, NULL, &tv);
+                }
+                while (rv > 0 && recv(sock, trash, sizeof(trash), 0) > 0);
             }
-            while (rv > 0 && recv(sock, trash, sizeof(trash), 0) > 0);
         }
         
         closesocket(fdTable[fd].fid.sock);
@@ -1791,7 +1801,7 @@ int OS_Accept(int listen_sock, int fail_on_intr, const char *webServerAddrs)
  *
  *----------------------------------------------------------------------
  */
-int OS_IpcClose(int ipcFd)
+int OS_IpcClose(int ipcFd, int shutdown)
 {
     if (ipcFd == -1) return 0;
 
@@ -1816,7 +1826,7 @@ int OS_IpcClose(int ipcFd)
 
     case FD_SOCKET_SYNC:
 
-	    OS_Close(ipcFd);
+	    OS_Close(ipcFd, shutdown);
 	    break;
 
     case FD_UNUSED:

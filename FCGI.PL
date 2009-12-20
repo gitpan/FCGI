@@ -19,14 +19,16 @@ require DynaLoader;
 # names by default without a very good reason. Use EXPORT_OK instead.
 # Do not simply export all your public functions/methods/constants.
 @EXPORT = qw(
-	
+
 );
 
 EOP
 
-print OUT '$VERSION = '.MM->parse_version('version.pm').";\n\n";
+print OUT '$VERSION = q{'.MM->parse_version('version.pm')."};\n\n";
 
 print OUT "bootstrap FCGI;\n" unless ($pure);
+
+print OUT '$VERSION = eval $VERSION;';
 
 print OUT <<'EOP' if ($pure);
 use Symbol;
@@ -121,7 +123,7 @@ sub Accept {
     $req->{env}{FCGI_ROLE} = $FCGI::rolenames{$req->{role}};
     my $param = FCGI::Stream->new($req, PARAMS);
     my ($nlen, $vlen);
-    while (defined($nlen = read_nv_len($param)) && 
+    while (defined($nlen = read_nv_len($param)) &&
 	   defined($vlen = read_nv_len($param))) {
 	my ($name, $val);
 	read $param, $name, $nlen;
@@ -202,7 +204,7 @@ sub read {
 	}
 	$self->{buf} .= $buf;
     }
-    my ($newbuf, $result) = (substr($self->{buf}, $len), 
+    my ($newbuf, $result) = (substr($self->{buf}, $len),
 			     substr($self->{buf}, 0, $len));
     $self->{buf} = $newbuf;
     $result;
@@ -225,8 +227,8 @@ sub write_record {
 	my $len = $length > 32*1024 ? 32*1024 : $length;
 	my $padlen = (8 - ($len % 8)) % 8;
 	my $templ = "CCnnCxa${len}x$padlen";
-	my $data = pack($templ, 
-			VERSION_1, $type, $self->{id}, $len, $padlen, 
+	my $data = pack($templ,
+			VERSION_1, $type, $self->{id}, $len, $padlen,
 			substr($content, $offset, $len));
 	syswrite $self->{socket}, $data;
 	$length -= $len;
@@ -366,7 +368,7 @@ sub READLINE {
 
     $c = $stream->GETC();
     if ($/ eq '') {
-	while ($c eq "\n") { 
+	while ($c eq "\n") {
 	    $c = $stream->GETC();
 	}
     }
@@ -390,10 +392,11 @@ sub OPEN {
     }
 }
 
-# Apparently some use fileno to determine if a filehandle is open,
-# so we might want to return a defined, but meaningless value.
-# An alternative would be to return the fcgi stream fd.
-# sub FILENO { -2 }
+# Some things (e.g. IPC::Run) use fileno to determine if a filehandle is open,
+# so we return a defined, but meaningless value. (-1 being the error return
+# value from the syscall in c, meaning it can never be a valid fd no)
+# Probably a better alternative would be to return the fcgi stream fd.
+sub FILENO { -1 }
 
 1;
 
@@ -448,7 +451,7 @@ that should be passed. This may change in the future.
 
 You should only use your own socket if your program
 is not started by a process manager such as mod_fastcgi
-(except for the FastCgiExternalServer case) or cgi-fcgi. 
+(except for the FastCgiExternalServer case) or cgi-fcgi.
 If you use the option, you have to let your FastCGI
 server know which port (and possibly server) your program
 is listening on.
