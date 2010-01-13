@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               FCGI
-version:            0.68_01
+version:            0.68_02
 abstract:           Fast CGI module
 author:
     - Sven Verdoolaege (skimo@kotnet.org)

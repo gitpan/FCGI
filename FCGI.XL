@@ -533,37 +533,31 @@ MODULE = FCGI		PACKAGE = FCGI::Stream
 
 #ifndef USE_SFIO
 
-int
+SV *
 PRINT(stream, ...)
 	FCGI::Stream	stream;
 
 	PREINIT:
-	int	n;
-    int retval;
-    int bytes_written;
+    int n;
+    STRLEN len;
+    register char *str;
+    bool ok = TRUE;
 
 	CODE:
-    retval = 0;
-    bytes_written = 0;
-    for (n = 1; n < items && bytes_written >= 0; ++n) {
-            STRLEN len;
-            register char *tmps; 
+    for (n = 1; ok && n < items; ++n) {
 #ifdef DO_UTF8
-            if (DO_UTF8(ST(n)) && !sv_utf8_downgrade(ST(n), 1))
-                croak("Wide character in FCGI::Stream::PRINT");
+        if (DO_UTF8(ST(n)) && !sv_utf8_downgrade(ST(n), 1))
+            croak("Wide character in FCGI::Stream::PRINT");
 #endif
-            tmps = (char *)SvPV(ST(n),len);
-	        bytes_written = FCGX_PutStr(tmps, len, stream);
-            if (bytes_written > 0) {
-                retval += bytes_written;
-            }
+        str = (char *)SvPV(ST(n),len);
+        if (FCGX_PutStr(str, len, stream) < 0)
+            ok = FALSE;
     }
-	if (SvTRUEx(perl_get_sv("|", FALSE))) 
-	    FCGX_FFlush(stream);
-    RETVAL = retval;
 
-    OUTPUT:
-    RETVAL
+	if (ok && SvTRUEx(perl_get_sv("|", FALSE)) && FCGX_FFlush(stream) < 0)
+	    ok = FALSE;
+
+    RETVAL = ok ? &PL_sv_yes : &PL_sv_undef;
 
 int
 WRITE(stream, bufsv, len, ...)
