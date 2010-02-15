@@ -15,7 +15,7 @@ threaded.PL
 typemap
 version.pm
 META.yml                                 Module meta-data (added by MakeMaker)
--e LICENSE.TERMS
+LICENSE.TERMS
 fcgiapp.c
 os_unix.c
 os_win32.c
