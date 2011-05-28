@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               FCGI
-version:            0.72
+version:            0.73
 abstract:           Fast CGI module
 author:
     - Sven Verdoolaege (skimo@kotnet.org)
@@ -11,6 +11,8 @@ configure_requires:
 build_requires:
     ExtUtils::MakeMaker:  0
 requires:  {}
+resources:
+    repository:  git://git.shadowcat.co.uk/catagits/fcgi2.git
 no_index:
     directory:
         - t
