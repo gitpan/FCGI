@@ -2015,8 +2015,8 @@ void FCGX_Finish_r(FCGX_Request *reqDataPtr)
         close |= FCGX_FClose(reqDataPtr->out);
         close |= FCGX_GetError(reqDataPtr->in);
 
-        /* discard any remaining data in input stream */
-        if (!close && !reqDataPtr->in->isClosed) {
+        /* discard any remaining data in input stream on persistent connections */
+        if (!close && !reqDataPtr->in->isClosed && reqDataPtr->keepConnection) {
             FCGX_Stream *stream = reqDataPtr->in;
 
             do {

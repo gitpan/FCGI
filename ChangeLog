@@ -1,3 +1,9 @@
+Version 0.74 --  24 Sep 2011 <rafl@debian.org>
+   o Stop leaking information across requests when using the deprecated
+     and undocumented old FCGI interface. This is CVE-2011-2766.
+   o Only discard input stream if FCGI_KEEP_CONN is set in
+     FCGI_BeginRequestBody flags.
+
 Version 0.73 --  19 May 2011 <rafl@debian.org>
    o Stop claiming we ship a file called -e in the MANIFEST.
 
