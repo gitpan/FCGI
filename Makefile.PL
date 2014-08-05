@@ -139,6 +139,11 @@ if ($sys eq "win32") {
     print "Please read configure.readme for information on how to run it yourself\n";
 
     $ENV{'CC'} = $Config{'cc'};
+    if ( $^O eq 'android' && !$ENV{'TMPDIR'} ) {
+        # See http://stackoverflow.com/a/15417261
+        require File::Spec;
+        $ENV{'TMPDIR'} = File::Spec->tmpdir();
+    }
     system("$Config{sh} configure");
 }
 

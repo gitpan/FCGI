@@ -4,7 +4,7 @@
       "Sven Verdoolaege (skimo@kotnet.org)"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.9904, CPAN::Meta::Converter version 2.141520",
+   "generated_by" : "ExtUtils::MakeMaker version 6.9907, CPAN::Meta::Converter version 2.142060",
    "license" : [
       "unknown"
    ],
@@ -43,5 +43,5 @@
          "url" : "git://git.shadowcat.co.uk/catagits/fcgi2.git"
       }
    },
-   "version" : "0.75"
+   "version" : "0.76"
 }
