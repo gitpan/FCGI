@@ -1,5 +1,9 @@
 Release history for FCGI
 
+Version 0.77 --  2014-08-05
+
+  o re-release to remove build artifacts that should not have been shipped
+
 Version 0.76 --  2014-08-05
 
   o On Android, set TMPDIR before calling configure (RT#97680, Brian Fraser)

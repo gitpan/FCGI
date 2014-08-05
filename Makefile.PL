@@ -116,8 +116,10 @@ WriteMakefile(
                   'POSTOP' => 
                 '$(MV) MANIFEST.old MANIFEST',
     },
-    'clean'        => { FILES => 'config.cache fcgi_config.h' .
-                      ' FCGI.c ' },
+    'clean'        => { FILES => 'config.cache fcgi_config.h fcgi_config.h.in' .
+                      ' FCGI.c aclocal.m4 autom4te.cache config.log config.status' .
+                      ' FCGI.cfg' },
+    'realclean'    => { FILES => 'configure MANIFEST.SKIP.bak MANIFEST.bak Makefile.old' },
     PM            => {'FCGI.pm' => '$(INST_ARCHLIBDIR)/FCGI.pm'},
     PREREQ_PM     => {'XSLoader' => '0'},
     @extras,

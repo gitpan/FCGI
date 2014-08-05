@@ -22,4 +22,4 @@ requires:
   perl: '5.006'
 resources:
   repository: git://git.shadowcat.co.uk/catagits/fcgi2.git
-version: '0.76'
+version: '0.77'
